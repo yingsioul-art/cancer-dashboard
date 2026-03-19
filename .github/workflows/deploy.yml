@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read    內容：已閱讀
+  contents: read
   pages: write
   id-token: write
 
