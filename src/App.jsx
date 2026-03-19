@@ -28,40 +28,6 @@ import {
   Loader2,
 } from 'lucide-react';
 
-// --- 指標屬性定義 ---
-const DEFAULT_INDICATOR_META = {
-  '化學治療靜脈給藥過程完成率': { type: 'avg', isNegative: false, unit: '%' },
-  '化療藥品外滲處理過程完成率': { type: 'avg', isNegative: false, unit: '%' },
-  '化療藥品外滲發生處理完成率': { type: 'avg', isNegative: false, unit: '%' },
-  '非起疱性化療藥品外滲發生件數': { type: 'sum', isNegative: true, unit: '件' },
-  '起疱性化療藥品外滲發生件數': { type: 'sum', isNegative: true, unit: '件' },
-  '針劑型化療給藥護理紀錄完整率': { type: 'avg', isNegative: false, unit: '%' },
-  '針劑型化療藥品給藥異常件數': { type: 'sum', isNegative: true, unit: '件' },
-  '護理師處理化療給藥自我安全防護完整率': { type: 'avg', isNegative: false, unit: '%' },
-};
-
-// --- 指標分類主題 ---
-const CATEGORY_DEFINITIONS = {
-  '化療給藥流程與紀錄': [
-    '化學治療靜脈給藥過程完成率',
-    '護理師處理化療給藥自我安全防護完整率',
-    '針劑型化療給藥護理紀錄完整率',
-    '針劑型化療藥品給藥異常件數',
-  ],
-  '外滲預防與處置': [
-    '化療藥品外滲處理過程完成率',
-    '化療藥品外滲發生處理完成率',
-    '非起疱性化療藥品外滲發生件數',
-    '起疱性化療藥品外滲發生件數',
-  ],
-};
-
-const INDICATOR_CATEGORY_MAP = Object.entries(CATEGORY_DEFINITIONS).reduce((acc, [category, indicators]) => {
-  indicators.forEach((indicator) => {
-    acc[indicator] = category;
-  });
-  return acc;
-}, {});
 
 // --- API 設定 ---
 const API_URL =
