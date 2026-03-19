@@ -45,6 +45,12 @@ const API_URL =
   'https://script.google.com/macros/s/AKfycbzjJgyMDSWmNzzowWRuxY5O2OrIWnIRXkpc4gMTUPVjGN49_Fi_c4RxC5k8AbjkRSY/exec';
 
 const MONTHS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
+const QUARTERS = [
+  { name: 'Q1', months: [1, 2, 3] },
+  { name: 'Q2', months: [4, 5, 6] },
+  { name: 'Q3', months: [7, 8, 9] },
+  { name: 'Q4', months: [10, 11, 12] },
+];
 
 // --- 輔助函數 ---
 const parseMaybeNumber = (value) => {
@@ -76,6 +82,12 @@ const calculateAggregate = (values, type) => {
 const checkIsSuccess = (value, target, isNegative) => {
   if (value === null || value === undefined) return null;
   return isNegative ? value <= target : value >= target;
+};
+
+const buildDetailPointTarget = (record, meta, mode, activeMonthCount = 1) => {
+  if (meta.type === 'avg') return record.target;
+  if (mode === 'month') return +(record.target / 12).toFixed(2);
+  return +((record.target * activeMonthCount) / 12).toFixed(2);
 };
 
 const getMonthlyFromRow = (row) => {
@@ -301,44 +313,51 @@ export default function App() {
     if (!selectedIndicator || !rawData.length) return [];
 
     const meta = indicatorMeta[selectedIndicator] || { type: 'avg', isNegative: false, unit: '%' };
-    const records = rawData.filter(
-      (d) => d.indicator === selectedIndicator && effectiveYears.includes(d.year)
-    );
-
-    let chartData = [];
+    const records = rawData
+      .filter((d) => d.indicator === selectedIndicator && effectiveYears.includes(d.year))
+      .sort((a, b) => Number(a.year) - Number(b.year));
 
     if (timeDimension === 'month') {
-      selectedMonths.forEach((monthNum) => {
-        const dataPoint = { name: `${monthNum}月` };
-        records.forEach((record) => {
-          dataPoint[record.year] = record.monthly[monthNum - 1];
-        });
-        chartData.push(dataPoint);
-      });
-    } else {
-      const quarters = [
-        { name: 'Q1', months: [1, 2, 3] },
-        { name: 'Q2', months: [4, 5, 6] },
-        { name: 'Q3', months: [7, 8, 9] },
-        { name: 'Q4', months: [10, 11, 12] },
-      ];
+      return records.flatMap((record) =>
+        selectedMonths
+          .map((monthNum) => {
+            const value = record.monthly[monthNum - 1];
+            if (value === null || value === undefined) return null;
 
-      quarters.forEach((q) => {
-        const hasSelectedMonthInQ = q.months.some((m) => selectedMonths.includes(m));
-        if (!hasSelectedMonthInQ) return;
-
-        const dataPoint = { name: q.name };
-        records.forEach((record) => {
-          const qValues = q.months
-            .filter((m) => selectedMonths.includes(m))
-            .map((m) => record.monthly[m - 1]);
-          dataPoint[record.year] = calculateAggregate(qValues, meta.type);
-        });
-        chartData.push(dataPoint);
-      });
+            const target = buildDetailPointTarget(record, meta, 'month', 1);
+            return {
+              name: `${record.year}/${monthNum}`,
+              year: record.year,
+              period: `${monthNum}月`,
+              value,
+              target,
+              isSuccess: checkIsSuccess(value, target, meta.isNegative),
+            };
+          })
+          .filter(Boolean)
+      );
     }
 
-    return chartData;
+    return records.flatMap((record) =>
+      QUARTERS.map((quarter) => {
+        const activeMonths = quarter.months.filter((m) => selectedMonths.includes(m));
+        if (!activeMonths.length) return null;
+
+        const quarterValues = activeMonths.map((m) => record.monthly[m - 1]);
+        const value = calculateAggregate(quarterValues, meta.type);
+        if (value === null) return null;
+
+        const target = buildDetailPointTarget(record, meta, 'quarter', activeMonths.length);
+        return {
+          name: `${record.year} ${quarter.name}`,
+          year: record.year,
+          period: quarter.name,
+          value,
+          target,
+          isSuccess: checkIsSuccess(value, target, meta.isNegative),
+        };
+      }).filter(Boolean)
+    );
   }, [rawData, indicatorMeta, selectedIndicator, effectiveYears, selectedMonths, timeDimension]);
 
   const latestReview = useMemo(() => {
@@ -408,7 +427,7 @@ export default function App() {
         <div className="p-6 border-b border-slate-100">
           <div className="flex items-center gap-2 text-blue-700 font-bold text-xl mb-1">
             <Activity className="w-6 h-6" />
-            <span>癌症照護品管中心</span>
+            <span>癌症護理品管指標</span>
           </div>
           <p className="text-xs text-slate-400">品質指標監測儀表板</p>
         </div>
@@ -505,7 +524,7 @@ export default function App() {
         <header className="bg-white px-8 py-5 border-b border-slate-200 flex justify-between items-center shrink-0 z-10 shadow-sm">
           <div>
             <h1 className="text-2xl font-bold text-slate-800">
-              {currentView === 'overview' ? '全院品質總覽' : '單一指標趨勢分析'}
+              {currentView === 'overview' ? '總覽' : '單一指標'}
             </h1>
             <p className="text-sm text-slate-500 mt-1">
               資料區間：{effectiveYears.length > 0 ? effectiveYears.join(', ') : '未選擇年份'} 年 ({selectedMonths.length} 個月份)
@@ -680,9 +699,19 @@ export default function App() {
                   {detailChartData.length > 0 ? (
                     <ResponsiveContainer width="100%" height={400}>
                       {indicatorMeta[selectedIndicator].type === 'avg' ? (
-                        <LineChart data={detailChartData} margin={{ top: 24, right: 30, left: 0, bottom: 0 }}>
+                        <LineChart data={detailChartData} margin={{ top: 24, right: 30, left: 0, bottom: 16 }}>
                           <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
-                          <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{ fill: '#64748b', fontSize: 12 }} dy={10} />
+                          <XAxis
+                            dataKey="name"
+                            axisLine={false}
+                            tickLine={false}
+                            tick={{ fill: '#64748b', fontSize: 12 }}
+                            dy={10}
+                            angle={detailChartData.length > 8 ? -35 : 0}
+                            textAnchor={detailChartData.length > 8 ? 'end' : 'middle'}
+                            height={detailChartData.length > 8 ? 70 : 40}
+                            interval={0}
+                          />
                           <YAxis
                             axisLine={false}
                             tickLine={false}
@@ -693,78 +722,90 @@ export default function App() {
                           <Tooltip
                             contentStyle={{ borderRadius: '1rem', border: 'none', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)' }}
                             labelStyle={{ fontWeight: 'bold', color: '#1e293b', marginBottom: '8px' }}
-                            formatter={(value, name) => [formatDisplayValue(value, indicatorMeta[selectedIndicator].unit, 'avg'), name]}
+                            formatter={(value, name) => [
+                              formatDisplayValue(value, indicatorMeta[selectedIndicator].unit, name === '目標值' ? 'avg' : indicatorMeta[selectedIndicator].type),
+                              name,
+                            ]}
                           />
                           <Legend iconType="circle" wrapperStyle={{ paddingTop: '20px' }} />
 
-                          {effectiveYears.map((year, i) => {
-                            const colors = ['#2563eb', '#8b5cf6', '#ec4899', '#14b8a6', '#f59e0b', '#10b981'];
-                            return (
-                              <Line
-                                key={year}
-                                type="monotone"
-                                dataKey={year}
-                                name={year}
-                                stroke={colors[i % colors.length]}
-                                strokeWidth={3}
-                                dot={{ r: 4, strokeWidth: 2 }}
-                                activeDot={{ r: 6, strokeWidth: 0 }}
-                                connectNulls
-                              >
-                                <LabelList
-                                  dataKey={year}
-                                  position="top"
-                                  formatter={(value) =>
-                                    value === null || value === undefined
-                                      ? ''
-                                      : formatDisplayValue(value, indicatorMeta[selectedIndicator].unit, 'avg')
-                                  }
-                                  style={{ fill: '#1e293b', fontSize: 12, fontWeight: 600 }}
-                                />
-                              </Line>
-                            );
-                          })}
+                          <Line
+                            type="monotone"
+                            dataKey="target"
+                            name="目標值"
+                            stroke="#94a3b8"
+                            strokeWidth={2}
+                            strokeDasharray="6 6"
+                            dot={false}
+                            activeDot={false}
+                          />
+                          <Line
+                            type="monotone"
+                            dataKey="value"
+                            name="監測結果"
+                            stroke="#2563eb"
+                            strokeWidth={3}
+                            dot={{ r: 4, strokeWidth: 2 }}
+                            activeDot={{ r: 6, strokeWidth: 0 }}
+                            connectNulls
+                          >
+                            <LabelList
+                              dataKey="value"
+                              position="top"
+                              formatter={(value) =>
+                                value === null || value === undefined
+                                  ? ''
+                                  : formatDisplayValue(value, indicatorMeta[selectedIndicator].unit, 'avg')
+                              }
+                              style={{ fill: '#1e293b', fontSize: 12, fontWeight: 600 }}
+                            />
+                          </Line>
                         </LineChart>
                       ) : (
-                        <BarChart data={detailChartData} margin={{ top: 24, right: 30, left: 0, bottom: 0 }}>
+                        <BarChart data={detailChartData} margin={{ top: 24, right: 30, left: 0, bottom: 16 }}>
                           <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
-                          <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{ fill: '#64748b', fontSize: 12 }} dy={10} />
+                          <XAxis
+                            dataKey="name"
+                            axisLine={false}
+                            tickLine={false}
+                            tick={{ fill: '#64748b', fontSize: 12 }}
+                            dy={10}
+                            angle={detailChartData.length > 8 ? -35 : 0}
+                            textAnchor={detailChartData.length > 8 ? 'end' : 'middle'}
+                            height={detailChartData.length > 8 ? 70 : 40}
+                            interval={0}
+                          />
                           <YAxis axisLine={false} tickLine={false} tick={{ fill: '#64748b', fontSize: 12 }} dx={-10} />
                           <Tooltip
                             contentStyle={{ borderRadius: '1rem', border: 'none', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)' }}
                             cursor={{ fill: '#f1f5f9' }}
-                            formatter={(value, name) => [formatDisplayValue(value, indicatorMeta[selectedIndicator].unit, 'sum'), name]}
+                            formatter={(value, name, props) => {
+                              if (name === '監測結果') {
+                                return [formatDisplayValue(value, indicatorMeta[selectedIndicator].unit, 'sum'), name];
+                              }
+                              return [formatDisplayValue(props?.payload?.target, indicatorMeta[selectedIndicator].unit, 'sum'), '目標值'];
+                            }}
                           />
                           <Legend iconType="circle" wrapperStyle={{ paddingTop: '20px' }} />
 
-                          {effectiveYears.map((year) => {
-                            const target = getTargetForYear(year);
-                            const isNeg = indicatorMeta[selectedIndicator].isNegative;
-
-                            return (
-                              <Bar key={year} dataKey={year} name={year} radius={[4, 4, 0, 0]} maxBarSize={50}>
-                                <LabelList
-                                  dataKey={year}
-                                  position="top"
-                                  formatter={(value) =>
-                                    value === null || value === undefined
-                                      ? ''
-                                      : formatDisplayValue(value, indicatorMeta[selectedIndicator].unit, 'sum')
-                                  }
-                                  style={{ fill: '#1e293b', fontSize: 12, fontWeight: 600 }}
-                                />
-                                {detailChartData.map((entry, index) => {
-                                  const val = entry[year];
-                                  let fill = '#94a3b8';
-                                  if (val !== undefined && val !== null) {
-                                    const success = checkIsSuccess(val, target, isNeg);
-                                    fill = success ? '#10b981' : '#f43f5e';
-                                  }
-                                  return <Cell key={`cell-${year}-${index}`} fill={fill} />;
-                                })}
-                              </Bar>
-                            );
-                          })}
+                          <Bar dataKey="value" name="監測結果" radius={[4, 4, 0, 0]} maxBarSize={50}>
+                            <LabelList
+                              dataKey="value"
+                              position="top"
+                              formatter={(value) =>
+                                value === null || value === undefined
+                                  ? ''
+                                  : formatDisplayValue(value, indicatorMeta[selectedIndicator].unit, 'sum')
+                              }
+                              style={{ fill: '#1e293b', fontSize: 12, fontWeight: 600 }}
+                            />
+                            {detailChartData.map((entry, index) => (
+                              <Cell
+                                key={`cell-${index}`}
+                                fill={entry.isSuccess ? '#10b981' : '#f43f5e'}
+                              />
+                            ))}
+                          </Bar>
                         </BarChart>
                       )}
                     </ResponsiveContainer>
@@ -776,7 +817,7 @@ export default function App() {
                 </div>
               </div>
 
-              <div className="bg-blue-50 border border-blue-100 rounded-[2rem] p-6 md:p-8 flex gap-4 items-start shadow-sm">  
+              <div className="bg-blue-50 border border-blue-100 rounded-[2rem] p-6 md:p-8 flex gap-4 items-start shadow-sm">
                 <div className="bg-blue-100 p-3 rounded-xl shrink-0 mt-1">
                   <FileText className="w-6 h-6 text-blue-600" />
                 </div>
