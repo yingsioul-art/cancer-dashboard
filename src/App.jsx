@@ -28,7 +28,7 @@ import {
   Loader2,
 } from 'lucide-react';
 
-// --- 1. 指標屬性定義 ---
+// --- 指標屬性定義 ---
 const DEFAULT_INDICATOR_META = {
   '化學治療靜脈給藥過程完成率': { type: 'avg', isNegative: false, unit: '%' },
   '化療藥品外滲處理過程完成率': { type: 'avg', isNegative: false, unit: '%' },
@@ -40,7 +40,30 @@ const DEFAULT_INDICATOR_META = {
   '護理師處理化療給藥自我安全防護完整率': { type: 'avg', isNegative: false, unit: '%' },
 };
 
-// --- 2. API 設定 ---
+// --- 指標分類主題 ---
+const CATEGORY_DEFINITIONS = {
+  '化療給藥流程與紀錄': [
+    '化學治療靜脈給藥過程完成率',
+    '護理師處理化療給藥自我安全防護完整率',
+    '針劑型化療給藥護理紀錄完整率',
+    '針劑型化療藥品給藥異常件數',
+  ],
+  '外滲預防與處置': [
+    '化療藥品外滲處理過程完成率',
+    '化療藥品外滲發生處理完成率',
+    '非起疱性化療藥品外滲發生件數',
+    '起疱性化療藥品外滲發生件數',
+  ],
+};
+
+const INDICATOR_CATEGORY_MAP = Object.entries(CATEGORY_DEFINITIONS).reduce((acc, [category, indicators]) => {
+  indicators.forEach((indicator) => {
+    acc[indicator] = category;
+  });
+  return acc;
+}, {});
+
+// --- API 設定 ---
 const API_URL =
   'https://script.google.com/macros/s/AKfycbzjJgyMDSWmNzzowWRuxY5O2OrIWnIRXkpc4gMTUPVjGN49_Fi_c4RxC5k8AbjkRSY/exec';
 
@@ -52,7 +75,11 @@ const QUARTERS = [
   { name: 'Q4', months: [10, 11, 12] },
 ];
 
+const strokeCollator = new Intl.Collator('zh-Hant-u-co-stroke');
+
 // --- 輔助函數 ---
+const sortByStroke = (list) => [...list].sort((a, b) => strokeCollator.compare(a, b));
+
 const parseMaybeNumber = (value) => {
   if (value === '' || value === null || value === undefined) return null;
   if (typeof value === 'number') return Number.isFinite(value) ? value : null;
@@ -90,7 +117,6 @@ const buildDetailPointTarget = (record, meta, mode, activeMonthCount = 1) => {
   return +((record.target * activeMonthCount) / 12).toFixed(2);
 };
 
-// 新增：依目前監測結果自動調整 Y 軸上下界
 const getDynamicYAxisDomain = (chartData, unit) => {
   const values = chartData
     .flatMap((item) => [item.value, item.target])
@@ -98,8 +124,8 @@ const getDynamicYAxisDomain = (chartData, unit) => {
 
   if (!values.length) return ['auto', 'auto'];
 
-  let min = Math.min(...values);
-  let max = Math.max(...values);
+  const min = Math.min(...values);
+  const max = Math.max(...values);
 
   if (unit === '%') {
     const range = max - min;
@@ -214,7 +240,6 @@ const loadJsonp = (url) =>
     document.body.appendChild(script);
   });
 
-// --- 主元件 ---
 export default function App() {
   const [indicatorMeta, setIndicatorMeta] = useState(DEFAULT_INDICATOR_META);
   const [rawData, setRawData] = useState([]);
@@ -228,6 +253,17 @@ export default function App() {
   const [currentView, setCurrentView] = useState('overview');
   const [selectedIndicator, setSelectedIndicator] = useState(null);
   const [timeDimension, setTimeDimension] = useState('month');
+
+  const [viewportWidth, setViewportWidth] = useState(
+    typeof window !== 'undefined' ? window.innerWidth : 1440
+  );
+
+  // --- 介面寬度監聽 ---
+  useEffect(() => {
+    const handleResize = () => setViewportWidth(window.innerWidth);
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
 
   // --- 載入外部資料 ---
   useEffect(() => {
@@ -302,23 +338,49 @@ export default function App() {
     });
   }, [availableYearsList]);
 
-  // --- 如果目前選的指標已不存在，清空 ---
+  const effectiveYears = selectedYears.length ? selectedYears : availableYearsList;
+
+  // --- 不同年度下可用的指標 ---
+  const availableIndicatorNames = useMemo(() => {
+    const indicators = rawData
+      .filter((row) => effectiveYears.includes(row.year))
+      .map((row) => row.indicator);
+    return sortByStroke([...new Set(indicators)]);
+  }, [rawData, effectiveYears]);
+
+  // --- 若目前指標不在年度範圍內，自動清空 ---
   useEffect(() => {
     if (!selectedIndicator) return;
-    if (!indicatorMeta[selectedIndicator]) {
+    if (!availableIndicatorNames.includes(selectedIndicator)) {
       setSelectedIndicator(null);
       setCurrentView('overview');
     }
-  }, [indicatorMeta, selectedIndicator]);
+  }, [availableIndicatorNames, selectedIndicator]);
 
-  const effectiveYears = selectedYears.length ? selectedYears : availableYearsList;
-  const indicatorNames = useMemo(() => Object.keys(indicatorMeta), [indicatorMeta]);
+  // --- 指標分類群組（筆畫順序）---
+  const availableIndicatorGroups = useMemo(() => {
+    const grouped = {};
 
-  // --- Overview 資料 ---
+    availableIndicatorNames.forEach((indicator) => {
+      const category = INDICATOR_CATEGORY_MAP[indicator] || '其他';
+      if (!grouped[category]) grouped[category] = [];
+      grouped[category].push(indicator);
+    });
+
+    return sortByStroke(Object.keys(grouped)).map((category) => ({
+      category,
+      indicators: sortByStroke(grouped[category]),
+    }));
+  }, [availableIndicatorNames]);
+
+  // --- 快速跳轉選單依當年度可用指標 ---
+  const indicatorNames = useMemo(() => availableIndicatorNames, [availableIndicatorNames]);
+
+  // --- Overview 資料（僅顯示當年度有資料的指標）---
   const overviewData = useMemo(() => {
     if (!rawData.length) return [];
 
-    return indicatorNames.map((indicatorName) => {
+    return availableIndicatorNames.map((indicatorName) => {
       const meta = indicatorMeta[indicatorName] || { type: 'avg', isNegative: false, unit: '%' };
 
       const indicatorRecords = rawData
@@ -343,9 +405,21 @@ export default function App() {
         value: calculatedValue,
         target: latestTarget,
         isSuccess,
+        category: INDICATOR_CATEGORY_MAP[indicatorName] || '其他',
       };
     });
-  }, [rawData, indicatorMeta, indicatorNames, effectiveYears, selectedMonths]);
+  }, [rawData, indicatorMeta, availableIndicatorNames, effectiveYears, selectedMonths]);
+
+  const groupedOverviewData = useMemo(() => {
+    return availableIndicatorGroups
+      .map((group) => ({
+        category: group.category,
+        items: group.indicators
+          .map((indicator) => overviewData.find((item) => item.name === indicator))
+          .filter(Boolean),
+      }))
+      .filter((group) => group.items.length > 0);
+  }, [availableIndicatorGroups, overviewData]);
 
   const overallSuccessRate = useMemo(() => {
     const validIndicators = overviewData.filter((d) => d.value !== null);
@@ -372,7 +446,7 @@ export default function App() {
 
             const target = buildDetailPointTarget(record, meta, 'month', 1);
             return {
-              name: `${record.year}/${monthNum}`,
+              name: `${record.year}/${String(monthNum).padStart(2, '0')}`,
               year: record.year,
               period: `${monthNum}月`,
               value,
@@ -406,7 +480,6 @@ export default function App() {
     );
   }, [rawData, indicatorMeta, selectedIndicator, effectiveYears, selectedMonths, timeDimension]);
 
-  // 新增：依 detailChartData 自動算 Y 軸範圍
   const detailYAxisDomain = useMemo(() => {
     if (!selectedIndicator) return ['auto', 'auto'];
     return getDynamicYAxisDomain(detailChartData, indicatorMeta[selectedIndicator]?.unit);
@@ -415,24 +488,37 @@ export default function App() {
   const latestReview = useMemo(() => {
     if (!selectedIndicator || effectiveYears.length === 0 || !rawData.length) return '暫無檢討紀錄';
     const sortedYears = [...effectiveYears].sort((a, b) => Number(b) - Number(a));
-    const record = rawData.find((d) => d.indicator === selectedIndicator && d.year === sortedYears[0]);
+    const record = rawData.find(
+      (d) => d.indicator === selectedIndicator && d.year === sortedYears[0]
+    );
     return record && record.review ? `(${sortedYears[0]}年度) ${record.review}` : '暫無檢討紀錄';
   }, [rawData, selectedIndicator, effectiveYears]);
 
+  const isMobile = viewportWidth < 640;
+  const isTablet = viewportWidth >= 640 && viewportWidth < 1024;
+  const chartHeight = isMobile ? 320 : isTablet ? 380 : 460;
+  const useTiltedLabels = detailChartData.length > (isMobile ? 4 : 8);
+  const xAxisAngle = useTiltedLabels ? -35 : 0;
+  const xAxisHeight = useTiltedLabels ? (isMobile ? 88 : 72) : 40;
+
   const toggleYear = (year) => {
-    setSelectedYears((prev) =>
-      prev.includes(year)
-        ? prev.filter((y) => y !== year)
-        : [...prev, year].sort((a, b) => Number(a) - Number(b))
-    );
+    setSelectedYears((prev) => {
+      if (prev.includes(year)) {
+        if (prev.length === 1) return prev;
+        return prev.filter((y) => y !== year);
+      }
+      return [...prev, year].sort((a, b) => Number(a) - Number(b));
+    });
   };
 
   const toggleMonth = (month) => {
-    setSelectedMonths((prev) =>
-      prev.includes(month)
-        ? prev.filter((m) => m !== month).sort((a, b) => a - b)
-        : [...prev, month].sort((a, b) => a - b)
-    );
+    setSelectedMonths((prev) => {
+      if (prev.includes(month)) {
+        if (prev.length === 1) return prev;
+        return prev.filter((m) => m !== month).sort((a, b) => a - b);
+      }
+      return [...prev, month].sort((a, b) => a - b);
+    });
   };
 
   const handleIndicatorJump = (indicatorName) => {
@@ -442,7 +528,7 @@ export default function App() {
 
   if (isLoading) {
     return (
-      <div className="flex h-screen items-center justify-center bg-slate-50 font-sans">
+      <div className="flex min-h-screen items-center justify-center bg-slate-50 font-sans">
         <div className="flex flex-col items-center gap-4 text-blue-600">
           <Loader2 className="w-10 h-10 animate-spin" />
           <p className="font-medium text-slate-600 tracking-wide">載入雲端資料庫中，請稍候...</p>
@@ -453,7 +539,7 @@ export default function App() {
 
   if (error) {
     return (
-      <div className="flex h-screen items-center justify-center bg-slate-50 font-sans">
+      <div className="flex min-h-screen items-center justify-center bg-slate-50 font-sans p-4">
         <div className="flex flex-col items-center gap-4 text-rose-500 bg-rose-50 p-8 rounded-2xl shadow-sm border border-rose-100 max-w-md text-center">
           <AlertCircle className="w-12 h-12" />
           <h2 className="text-xl font-bold">資料連線失敗</h2>
@@ -470,470 +556,512 @@ export default function App() {
   }
 
   return (
-    <div className="flex h-screen bg-slate-50 text-slate-800 font-sans overflow-hidden">
-      <aside className="w-72 bg-white border-r border-slate-200 flex flex-col shadow-sm z-10">
-        <div className="p-6 border-b border-slate-100">
-          <div className="flex items-center gap-2 text-blue-700 font-bold text-xl mb-1">
-            <Activity className="w-6 h-6" />
-            <span>癌症護理品管指標</span>
-          </div>
-          <p className="text-xs text-slate-400">品質指標監測儀表板</p>
-        </div>
-
-        <div className="flex-1 overflow-y-auto p-6 space-y-8">
-          <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm shadow-sm">
-            {apiStatus === 'loading' && <span className="text-slate-600">正在載入線上資料...</span>}
-            {apiStatus === 'success' && <span className="text-emerald-700">{apiMessage}</span>}
-            {apiStatus === 'empty' && <span className="text-amber-700">{apiMessage}</span>}
-            {apiStatus === 'error' && <span className="text-rose-700">{apiMessage}</span>}
+    <div className="min-h-screen bg-slate-50 text-slate-800 font-sans">
+      <div className="flex min-h-screen flex-col xl:flex-row">
+        <aside className="w-full xl:w-80 bg-white border-b xl:border-b-0 xl:border-r border-slate-200 shadow-sm z-10">
+          <div className="p-6 border-b border-slate-100">
+            <div className="flex items-center gap-2 text-blue-700 font-bold text-xl mb-1">
+              <Activity className="w-6 h-6" />
+              <span>癌症護理品管指標</span>
+            </div>
+            <p className="text-xs text-slate-400">品質指標監測儀表板</p>
           </div>
 
-          <div className="space-y-3">
-            <div className="flex items-center gap-2 text-sm font-semibold text-slate-700">
-              <CalendarDays className="w-4 h-4 text-slate-400" />
-              <span>年度篩選區間</span>
+          <div className="p-6 space-y-8 xl:h-[calc(100vh-97px)] xl:overflow-y-auto">
+            <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm shadow-sm">
+              {apiStatus === 'loading' && <span className="text-slate-600">正在載入線上資料...</span>}
+              {apiStatus === 'success' && <span className="text-emerald-700">{apiMessage}</span>}
+              {apiStatus === 'empty' && <span className="text-amber-700">{apiMessage}</span>}
+              {apiStatus === 'error' && <span className="text-rose-700">{apiMessage}</span>}
             </div>
-            <div className="grid grid-cols-2 gap-2">
-              {availableYearsList.length > 0 ? (
-                availableYearsList.map((year) => (
-                  <button
-                    key={year}
-                    onClick={() => toggleYear(year)}
-                    className={`py-2 px-3 rounded-xl text-sm font-medium transition-all duration-200 border ${
-                      effectiveYears.includes(year)
-                        ? 'bg-blue-50 border-blue-200 text-blue-700 shadow-sm'
-                        : 'bg-white border-slate-200 text-slate-500 hover:bg-slate-50 hover:border-slate-300'
-                    }`}
-                  >
-                    {year}
-                  </button>
-                ))
-              ) : (
-                <div className="text-sm text-slate-400 col-span-2">無年份資料</div>
-              )}
-            </div>
-          </div>
 
-          <div className="space-y-3">
-            <div className="flex items-center gap-2 text-sm font-semibold text-slate-700">
-              <Filter className="w-4 h-4 text-slate-400" />
-              <span>月份詳細核取</span>
-            </div>
-            <div className="grid grid-cols-4 gap-2">
-              {MONTHS.map((month) => (
-                <button
-                  key={month}
-                  onClick={() => toggleMonth(month)}
-                  className={`py-1.5 text-xs rounded-lg font-medium transition-all duration-200 border ${
-                    selectedMonths.includes(month)
-                      ? 'bg-blue-600 border-blue-600 text-white shadow-sm'
-                      : 'bg-white border-slate-200 text-slate-500 hover:bg-slate-50'
-                  }`}
-                >
-                  {month}月
-                </button>
-              ))}
-            </div>
-          </div>
-
-          <div className="space-y-3 pt-4 border-t border-slate-100">
-            <div className="flex items-center gap-2 text-sm font-semibold text-slate-700">
-              <ListFilter className="w-4 h-4 text-slate-400" />
-              <span>快速跳轉指標</span>
-            </div>
-            <div className="relative">
-              <select
-                value={selectedIndicator || ''}
-                onChange={(e) => {
-                  if (e.target.value) handleIndicatorJump(e.target.value);
-                }}
-                className="w-full appearance-none bg-white border border-slate-200 text-slate-700 text-sm rounded-xl px-4 py-3 pr-8 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 shadow-sm"
-              >
-                <option value="" disabled>
-                  請選擇要檢視的指標...
-                </option>
-                {indicatorNames.map((name) => (
-                  <option key={name} value={name}>
-                    {name}
-                  </option>
-                ))}
-              </select>
-              <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-3 text-slate-400">
-                <svg className="fill-current h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20">
-                  <path d="M9.293 12.95l.707.707L15.657 8l-1.414-1.414L10 10.828 5.757 6.586 4.343 8z" />
-                </svg>
+            <div className="space-y-3">
+              <div className="flex items-center gap-2 text-sm font-semibold text-slate-700">
+                <CalendarDays className="w-4 h-4 text-slate-400" />
+                <span>年度篩選區間</span>
               </div>
-            </div>
-          </div>
-        </div>
-      </aside>
-
-      <main className="flex-1 flex flex-col overflow-hidden relative">
-        <header className="bg-white px-8 py-5 border-b border-slate-200 flex justify-between items-center shrink-0 z-10 shadow-sm">
-          <div>
-            <h1 className="text-2xl font-bold text-slate-800">
-              {currentView === 'overview' ? '總覽' : '單一指標'}
-            </h1>
-            <p className="text-sm text-slate-500 mt-1">
-              資料區間：{effectiveYears.length > 0 ? effectiveYears.join(', ') : '未選擇年份'} 年 ({selectedMonths.length} 個月份)
-            </p>
-          </div>
-
-          <div className="flex bg-slate-100 p-1 rounded-xl shadow-inner border border-slate-200">
-            <button
-              onClick={() => {
-                setCurrentView('overview');
-                setSelectedIndicator(null);
-              }}
-              className={`flex items-center gap-2 px-5 py-2.5 rounded-lg text-sm font-medium transition-all ${
-                currentView === 'overview'
-                  ? 'bg-white text-blue-700 shadow-sm'
-                  : 'text-slate-500 hover:text-slate-700 hover:bg-slate-200/50'
-              }`}
-            >
-              <LayoutDashboard className="w-4 h-4" />
-              總覽視圖
-            </button>
-            <button
-              onClick={() => selectedIndicator && setCurrentView('detail')}
-              disabled={!selectedIndicator}
-              className={`flex items-center gap-2 px-5 py-2.5 rounded-lg text-sm font-medium transition-all ${
-                currentView === 'detail'
-                  ? 'bg-white text-blue-700 shadow-sm'
-                  : 'text-slate-500 hover:text-slate-700 hover:bg-slate-200/50 disabled:opacity-50 disabled:cursor-not-allowed'
-              }`}
-            >
-              <TrendingUp className="w-4 h-4" />
-              分析視圖
-            </button>
-          </div>
-        </header>
-
-        <div className="flex-1 overflow-auto p-8 relative">
-          {currentView === 'overview' && (
-            <div className="max-w-7xl mx-auto space-y-8 animate-in fade-in duration-500">
-              <div className="bg-gradient-to-br from-blue-600 to-indigo-700 rounded-[2rem] p-8 text-white shadow-xl flex items-center justify-between relative overflow-hidden">
-                <div className="absolute top-0 right-0 -mr-16 -mt-16 w-64 h-64 rounded-full bg-white opacity-10 blur-3xl"></div>
-                <div className="relative z-10">
-                  <h2 className="text-blue-100 text-lg font-medium mb-2">所選期間整體達標率</h2>
-                  <div className="flex items-baseline gap-3">
-                    <span className="text-6xl font-bold tracking-tight">{overallSuccessRate}%</span>
-                    <span className="text-blue-200 text-sm">
-                      ({overviewData.filter((d) => d.isSuccess).length} /{' '}
-                      {overviewData.filter((d) => d.value !== null).length} 達標指標)
-                    </span>
-                  </div>
-                </div>
-                <div className="hidden md:flex items-center justify-center w-24 h-24 rounded-full bg-white/20 backdrop-blur-sm relative z-10">
-                  <Activity className="w-12 h-12 text-white" />
-                </div>
-              </div>
-
-              <div>
-                <h3 className="text-lg font-semibold text-slate-800 mb-4 flex items-center gap-2">
-                  <FileText className="w-5 h-5 text-slate-400" />
-                  各項指標結算
-                </h3>
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-5">
-                  {overviewData.map((item, idx) => (
-                    <div
-                      key={idx}
-                      onClick={() => handleIndicatorJump(item.name)}
-                      className="bg-white rounded-2xl p-5 border border-slate-200 shadow-sm hover:shadow-lg hover:border-blue-300 transition-all cursor-pointer group flex flex-col h-full relative overflow-hidden"
-                    >
-                      <div
-                        className={`absolute top-0 left-0 w-full h-1 ${
-                          item.isSuccess
-                            ? 'bg-emerald-500'
-                            : item.value === null
-                            ? 'bg-slate-200'
-                            : 'bg-rose-500'
-                        }`}
-                      ></div>
-
-                      <div className="flex justify-between items-start mb-4 mt-1">
-                        <div
-                          className={`p-2 rounded-xl ${
-                            item.isSuccess
-                              ? 'bg-emerald-50 text-emerald-600'
-                              : item.value === null
-                              ? 'bg-slate-50 text-slate-400'
-                              : 'bg-rose-50 text-rose-600'
-                          }`}
-                        >
-                          {item.isSuccess ? (
-                            <CheckCircle2 className="w-5 h-5" />
-                          ) : item.value === null ? (
-                            <AlertCircle className="w-5 h-5" />
-                          ) : (
-                            <XCircle className="w-5 h-5" />
-                          )}
-                        </div>
-                        <span className="text-xs font-medium text-slate-400 bg-slate-100 px-2 py-1 rounded-md">
-                          {item.meta.type === 'avg' ? '平均' : '加總'}
-                        </span>
-                      </div>
-
-                      <h4 className="text-sm font-semibold text-slate-700 leading-snug flex-1 mb-4 group-hover:text-blue-700 transition-colors">
-                        {item.name}
-                      </h4>
-
-                      <div className="mt-auto">
-                        <div className="flex items-end gap-1 mb-1">
-                          {item.value !== null ? (
-                            <>
-                              <span
-                                className={`text-2xl font-bold ${
-                                  item.isSuccess ? 'text-slate-800' : 'text-rose-600'
-                                }`}
-                              >
-                                {item.meta.type === 'avg' || item.meta.unit === '%'
-                                  ? Number(item.value).toFixed(1)
-                                  : item.value}
-                              </span>
-                              <span className="text-sm font-medium text-slate-500 mb-0.5">
-                                {item.meta.unit}
-                              </span>
-                            </>
-                          ) : (
-                            <span className="text-xl font-bold text-slate-400">無資料</span>
-                          )}
-                        </div>
-                        <div className="text-xs text-slate-400 flex items-center gap-1">
-                          目標: {item.target} {item.meta.unit}
-                          {item.meta.isNegative ? '(↓)' : '(↑)'}
-                        </div>
-                      </div>
-
-                      <div className="absolute bottom-4 right-4 opacity-0 group-hover:opacity-100 transform translate-x-2 group-hover:translate-x-0 transition-all">
-                        <ChevronRight className="w-5 h-5 text-blue-500" />
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            </div>
-          )}
-
-          {currentView === 'detail' && selectedIndicator && (
-            <div className="max-w-6xl mx-auto space-y-6 animate-in slide-in-from-right-8 duration-500">
-              <div className="bg-white p-6 rounded-[2rem] shadow-sm border border-slate-200 flex flex-col md:flex-row md:items-center justify-between gap-4">
-                <div>
-                  <div className="flex items-center gap-3 mb-2">
+              <div className="grid grid-cols-2 sm:grid-cols-4 xl:grid-cols-2 gap-2">
+                {availableYearsList.length > 0 ? (
+                  availableYearsList.map((year) => (
                     <button
-                      onClick={() => setCurrentView('overview')}
-                      className="p-1 hover:bg-slate-100 rounded-lg text-slate-400 transition-colors"
+                      key={year}
+                      onClick={() => toggleYear(year)}
+                      className={`py-2 px-3 rounded-xl text-sm font-medium transition-all duration-200 border ${
+                        effectiveYears.includes(year)
+                          ? 'bg-blue-50 border-blue-200 text-blue-700 shadow-sm'
+                          : 'bg-white border-slate-200 text-slate-500 hover:bg-slate-50 hover:border-slate-300'
+                      }`}
                     >
-                      <ChevronRight className="w-5 h-5 rotate-180" />
+                      {year}
                     </button>
-                    <h2 className="text-xl font-bold text-slate-800">{selectedIndicator}</h2>
-                  </div>
-                  <div className="flex flex-wrap items-center gap-3 text-sm text-slate-500 pl-9">
-                    <span className="bg-slate-100 px-2.5 py-1 rounded-md border border-slate-200">
-                      運算: {indicatorMeta[selectedIndicator].type === 'avg' ? '平均值' : '加總值'}
-                    </span>
-                    <span className="bg-slate-100 px-2.5 py-1 rounded-md border border-slate-200 flex items-center gap-1">
-                      方向:{' '}
-                      {indicatorMeta[selectedIndicator].isNegative ? (
-                        <span className="text-rose-600 font-medium">越低越好</span>
-                      ) : (
-                        <span className="text-emerald-600 font-medium">越高越好</span>
-                      )}
-                    </span>
-                    <span className="bg-slate-100 px-2.5 py-1 rounded-md border border-slate-200">
-                      單位: {indicatorMeta[selectedIndicator].unit}
-                    </span>
-                  </div>
-                </div>
-
-                <div className="flex bg-slate-100 p-1 rounded-xl">
-                  <button
-                    onClick={() => setTimeDimension('month')}
-                    className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${
-                      timeDimension === 'month'
-                        ? 'bg-white text-blue-700 shadow-sm'
-                        : 'text-slate-500 hover:text-slate-700'
-                    }`}
-                  >
-                    依月份展開
-                  </button>
-                  <button
-                    onClick={() => setTimeDimension('quarter')}
-                    className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${
-                      timeDimension === 'quarter'
-                        ? 'bg-white text-blue-700 shadow-sm'
-                        : 'text-slate-500 hover:text-slate-700'
-                    }`}
-                  >
-                    依季度聚合
-                  </button>
-                </div>
-              </div>
-
-              <div className="bg-white p-6 md:p-8 rounded-[2rem] shadow-sm border border-slate-200 min-h-[450px] flex flex-col">
-                <h3 className="text-slate-700 font-semibold mb-6 flex items-center gap-2">
-                  <TrendingUp className="w-5 h-5 text-blue-500" />
-                  趨勢圖表
-                </h3>
-                <div className="flex-1 w-full relative">
-                  {detailChartData.length > 0 ? (
-                    <ResponsiveContainer width="100%" height={400}>
-                      {indicatorMeta[selectedIndicator].type === 'avg' ? (
-                        <LineChart data={detailChartData} margin={{ top: 24, right: 30, left: 0, bottom: 16 }}>
-                          <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
-                          <XAxis
-                            dataKey="name"
-                            axisLine={false}
-                            tickLine={false}
-                            tick={{ fill: '#64748b', fontSize: 12 }}
-                            dy={10}
-                            angle={detailChartData.length > 8 ? -35 : 0}
-                            textAnchor={detailChartData.length > 8 ? 'end' : 'middle'}
-                            height={detailChartData.length > 8 ? 70 : 40}
-                            interval={0}
-                          />
-                          <YAxis
-                            axisLine={false}
-                            tickLine={false}
-                            tick={{ fill: '#64748b', fontSize: 12 }}
-                            dx={-10}
-                            domain={detailYAxisDomain}
-                            tickCount={6}
-                          />
-                          <Tooltip
-                            contentStyle={{
-                              borderRadius: '1rem',
-                              border: 'none',
-                              boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)',
-                            }}
-                            labelStyle={{ fontWeight: 'bold', color: '#1e293b', marginBottom: '8px' }}
-                            formatter={(value, name) => [
-                              formatDisplayValue(
-                                value,
-                                indicatorMeta[selectedIndicator].unit,
-                                name === '目標值' ? 'avg' : indicatorMeta[selectedIndicator].type
-                              ),
-                              name,
-                            ]}
-                          />
-                          <Legend iconType="circle" wrapperStyle={{ paddingTop: '20px' }} />
-
-                          <Line
-                            type="monotone"
-                            dataKey="target"
-                            name="目標值"
-                            stroke="#94a3b8"
-                            strokeWidth={2}
-                            strokeDasharray="6 6"
-                            dot={false}
-                            activeDot={false}
-                          />
-                          <Line
-                            type="monotone"
-                            dataKey="value"
-                            name="監測結果"
-                            stroke="#2563eb"
-                            strokeWidth={3}
-                            dot={{ r: 4, strokeWidth: 2 }}
-                            activeDot={{ r: 6, strokeWidth: 0 }}
-                            connectNulls
-                          >
-                            <LabelList
-                              dataKey="value"
-                              position="top"
-                              formatter={(value) =>
-                                value === null || value === undefined
-                                  ? ''
-                                  : formatDisplayValue(value, indicatorMeta[selectedIndicator].unit, 'avg')
-                              }
-                              style={{ fill: '#1e293b', fontSize: 12, fontWeight: 600 }}
-                            />
-                          </Line>
-                        </LineChart>
-                      ) : (
-                        <BarChart data={detailChartData} margin={{ top: 24, right: 30, left: 0, bottom: 16 }}>
-                          <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
-                          <XAxis
-                            dataKey="name"
-                            axisLine={false}
-                            tickLine={false}
-                            tick={{ fill: '#64748b', fontSize: 12 }}
-                            dy={10}
-                            angle={detailChartData.length > 8 ? -35 : 0}
-                            textAnchor={detailChartData.length > 8 ? 'end' : 'middle'}
-                            height={detailChartData.length > 8 ? 70 : 40}
-                            interval={0}
-                          />
-                          <YAxis
-                            axisLine={false}
-                            tickLine={false}
-                            tick={{ fill: '#64748b', fontSize: 12 }}
-                            dx={-10}
-                            domain={detailYAxisDomain}
-                            tickCount={6}
-                          />
-                          <Tooltip
-                            contentStyle={{
-                              borderRadius: '1rem',
-                              border: 'none',
-                              boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)',
-                            }}
-                            cursor={{ fill: '#f1f5f9' }}
-                            formatter={(value, name, props) => {
-                              if (name === '監測結果') {
-                                return [formatDisplayValue(value, indicatorMeta[selectedIndicator].unit, 'sum'), name];
-                              }
-                              return [
-                                formatDisplayValue(
-                                  props?.payload?.target,
-                                  indicatorMeta[selectedIndicator].unit,
-                                  'sum'
-                                ),
-                                '目標值',
-                              ];
-                            }}
-                          />
-                          <Legend iconType="circle" wrapperStyle={{ paddingTop: '20px' }} />
-
-                          <Bar dataKey="value" name="監測結果" radius={[4, 4, 0, 0]} maxBarSize={50}>
-                            <LabelList
-                              dataKey="value"
-                              position="top"
-                              formatter={(value) =>
-                                value === null || value === undefined
-                                  ? ''
-                                  : formatDisplayValue(value, indicatorMeta[selectedIndicator].unit, 'sum')
-                              }
-                              style={{ fill: '#1e293b', fontSize: 12, fontWeight: 600 }}
-                            />
-                            {detailChartData.map((entry, index) => (
-                              <Cell key={`cell-${index}`} fill={entry.isSuccess ? '#10b981' : '#f43f5e'} />
-                            ))}
-                          </Bar>
-                        </BarChart>
-                      )}
-                    </ResponsiveContainer>
-                  ) : (
-                    <div className="absolute inset-0 flex items-center justify-center text-slate-400">
-                      沒有符合篩選條件的資料可供顯示
-                    </div>
-                  )}
-                </div>
-              </div>
-
-              <div className="bg-blue-50 border border-blue-100 rounded-[2rem] p-6 md:p-8 flex gap-4 items-start shadow-sm">
-                <div className="bg-blue-100 p-3 rounded-xl shrink-0 mt-1">
-                  <FileText className="w-6 h-6 text-blue-600" />
-                </div>
-                <div>
-                  <h3 className="text-lg font-bold text-blue-900 mb-2">最新檢討與改善回饋</h3>
-                  <p className="text-slate-700 leading-relaxed whitespace-pre-wrap">{latestReview}</p>
-                </div>
+                  ))
+                ) : (
+                  <div className="text-sm text-slate-400 col-span-2">無年份資料</div>
+                )}
               </div>
             </div>
-          )}
-        </div>
-      </main>
+
+            <div className="space-y-3">
+              <div className="flex items-center gap-2 text-sm font-semibold text-slate-700">
+                <Filter className="w-4 h-4 text-slate-400" />
+                <span>月份詳細核取</span>
+              </div>
+              <div className="grid grid-cols-4 sm:grid-cols-6 xl:grid-cols-4 gap-2">
+                {MONTHS.map((month) => (
+                  <button
+                    key={month}
+                    onClick={() => toggleMonth(month)}
+                    className={`py-1.5 text-xs rounded-lg font-medium transition-all duration-200 border ${
+                      selectedMonths.includes(month)
+                        ? 'bg-blue-600 border-blue-600 text-white shadow-sm'
+                        : 'bg-white border-slate-200 text-slate-500 hover:bg-slate-50'
+                    }`}
+                  >
+                    {month}月
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="space-y-4 pt-4 border-t border-slate-100">
+              <div className="flex items-center gap-2 text-sm font-semibold text-slate-700">
+                <ListFilter className="w-4 h-4 text-slate-400" />
+                <span>快速跳轉指標</span>
+              </div>
+
+              <div className="relative">
+                <select
+                  value={selectedIndicator || ''}
+                  onChange={(e) => {
+                    if (e.target.value) handleIndicatorJump(e.target.value);
+                  }}
+                  className="w-full appearance-none bg-white border border-slate-200 text-slate-700 text-sm rounded-xl px-4 py-3 pr-8 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 shadow-sm"
+                >
+                  <option value="" disabled>
+                    請選擇要檢視的指標...
+                  </option>
+                  {availableIndicatorGroups.map((group) => (
+                    <optgroup key={group.category} label={group.category}>
+                      {group.indicators.map((name) => (
+                        <option key={name} value={name}>
+                          {name}
+                        </option>
+                      ))}
+                    </optgroup>
+                  ))}
+                </select>
+                <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-3 text-slate-400">
+                  <svg className="fill-current h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20">
+                    <path d="M9.293 12.95l.707.707L15.657 8l-1.414-1.414L10 10.828 5.757 6.586 4.343 8z" />
+                  </svg>
+                </div>
+              </div>
+
+              <div className="space-y-3">
+                <div className="text-sm font-semibold text-slate-700">年度可用指標分類</div>
+                {availableIndicatorGroups.length > 0 ? (
+                  availableIndicatorGroups.map((group) => (
+                    <div key={group.category} className="rounded-2xl border border-slate-200 bg-slate-50 p-3">
+                      <div className="text-sm font-semibold text-slate-700 mb-2">{group.category}</div>
+                      <div className="flex flex-wrap gap-2">
+                        {group.indicators.map((indicator) => (
+                          <button
+                            key={indicator}
+                            onClick={() => handleIndicatorJump(indicator)}
+                            className="rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs text-slate-600 hover:border-blue-300 hover:text-blue-700 hover:bg-blue-50 transition-colors"
+                          >
+                            {indicator}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  ))
+                ) : (
+                  <div className="text-sm text-slate-400">目前篩選年度無可用指標</div>
+                )}
+              </div>
+            </div>
+          </div>
+        </aside>
+
+        <main className="flex-1 min-w-0 flex flex-col overflow-hidden relative">
+          <header className="bg-white px-4 sm:px-6 lg:px-8 py-5 border-b border-slate-200 flex flex-col lg:flex-row lg:justify-between lg:items-center gap-4 shrink-0 z-10 shadow-sm">
+            <div>
+              <h1 className="text-2xl font-bold text-slate-800">
+                {currentView === 'overview' ? '總覽' : '單一指標'}
+              </h1>
+              <p className="text-sm text-slate-500 mt-1">
+                資料區間：{effectiveYears.length > 0 ? effectiveYears.join(', ') : '未選擇年份'} 年
+                （{selectedMonths.length} 個月份）
+              </p>
+            </div>
+
+            <div className="flex bg-slate-100 p-1 rounded-xl shadow-inner border border-slate-200 self-start lg:self-auto">
+              <button
+                onClick={() => {
+                  setCurrentView('overview');
+                  setSelectedIndicator(null);
+                }}
+                className={`flex items-center gap-2 px-4 sm:px-5 py-2.5 rounded-lg text-sm font-medium transition-all ${
+                  currentView === 'overview'
+                    ? 'bg-white text-blue-700 shadow-sm'
+                    : 'text-slate-500 hover:text-slate-700 hover:bg-slate-200/50'
+                }`}
+              >
+                <LayoutDashboard className="w-4 h-4" />
+                總覽視圖
+              </button>
+              <button
+                onClick={() => selectedIndicator && setCurrentView('detail')}
+                disabled={!selectedIndicator}
+                className={`flex items-center gap-2 px-4 sm:px-5 py-2.5 rounded-lg text-sm font-medium transition-all ${
+                  currentView === 'detail'
+                    ? 'bg-white text-blue-700 shadow-sm'
+                    : 'text-slate-500 hover:text-slate-700 hover:bg-slate-200/50 disabled:opacity-50 disabled:cursor-not-allowed'
+                }`}
+              >
+                <TrendingUp className="w-4 h-4" />
+                分析視圖
+              </button>
+            </div>
+          </header>
+
+          <div className="flex-1 overflow-auto p-4 sm:p-6 lg:p-8 relative">
+            {currentView === 'overview' && (
+              <div className="max-w-7xl mx-auto space-y-8 animate-in fade-in duration-500">
+                <div className="bg-gradient-to-br from-blue-600 to-indigo-700 rounded-[2rem] p-6 sm:p-8 text-white shadow-xl flex items-center justify-between relative overflow-hidden">
+                  <div className="absolute top-0 right-0 -mr-16 -mt-16 w-64 h-64 rounded-full bg-white opacity-10 blur-3xl"></div>
+                  <div className="relative z-10">
+                    <h2 className="text-blue-100 text-lg font-medium mb-2">所選期間整體達標率</h2>
+                    <div className="flex flex-wrap items-baseline gap-3">
+                      <span className="text-5xl sm:text-6xl font-bold tracking-tight">
+                        {overallSuccessRate}%
+                      </span>
+                      <span className="text-blue-200 text-sm">
+                        ({overviewData.filter((d) => d.isSuccess).length} /{' '}
+                        {overviewData.filter((d) => d.value !== null).length} 達標指標)
+                      </span>
+                    </div>
+                  </div>
+                  <div className="hidden md:flex items-center justify-center w-24 h-24 rounded-full bg-white/20 backdrop-blur-sm relative z-10">
+                    <Activity className="w-12 h-12 text-white" />
+                  </div>
+                </div>
+
+                {groupedOverviewData.map((group) => (
+                  <div key={group.category}>
+                    <h3 className="text-lg font-semibold text-slate-800 mb-4 flex items-center gap-2">
+                      <FileText className="w-5 h-5 text-slate-400" />
+                      {group.category}
+                    </h3>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4 gap-5">
+                      {group.items.map((item, idx) => (
+                        <div
+                          key={`${group.category}-${idx}`}
+                          onClick={() => handleIndicatorJump(item.name)}
+                          className="bg-white rounded-2xl p-5 border border-slate-200 shadow-sm hover:shadow-lg hover:border-blue-300 transition-all cursor-pointer group flex flex-col h-full relative overflow-hidden"
+                        >
+                          <div
+                            className={`absolute top-0 left-0 w-full h-1 ${
+                              item.isSuccess
+                                ? 'bg-emerald-500'
+                                : item.value === null
+                                ? 'bg-slate-200'
+                                : 'bg-rose-500'
+                            }`}
+                          ></div>
+
+                          <div className="flex justify-between items-start mb-4 mt-1">
+                            <div
+                              className={`p-2 rounded-xl ${
+                                item.isSuccess
+                                  ? 'bg-emerald-50 text-emerald-600'
+                                  : item.value === null
+                                  ? 'bg-slate-50 text-slate-400'
+                                  : 'bg-rose-50 text-rose-600'
+                              }`}
+                            >
+                              {item.isSuccess ? (
+                                <CheckCircle2 className="w-5 h-5" />
+                              ) : item.value === null ? (
+                                <AlertCircle className="w-5 h-5" />
+                              ) : (
+                                <XCircle className="w-5 h-5" />
+                              )}
+                            </div>
+                            <span className="text-xs font-medium text-slate-400 bg-slate-100 px-2 py-1 rounded-md">
+                              {item.meta.type === 'avg' ? '平均' : '加總'}
+                            </span>
+                          </div>
+
+                          <h4 className="text-sm font-semibold text-slate-700 leading-snug flex-1 mb-4 group-hover:text-blue-700 transition-colors">
+                            {item.name}
+                          </h4>
+
+                          <div className="mt-auto">
+                            <div className="flex items-end gap-1 mb-1">
+                              {item.value !== null ? (
+                                <>
+                                  <span
+                                    className={`text-2xl font-bold ${
+                                      item.isSuccess ? 'text-slate-800' : 'text-rose-600'
+                                    }`}
+                                  >
+                                    {item.meta.type === 'avg' || item.meta.unit === '%'
+                                      ? Number(item.value).toFixed(1)
+                                      : item.value}
+                                  </span>
+                                  <span className="text-sm font-medium text-slate-500 mb-0.5">
+                                    {item.meta.unit}
+                                  </span>
+                                </>
+                              ) : (
+                                <span className="text-xl font-bold text-slate-400">無資料</span>
+                              )}
+                            </div>
+                            <div className="text-xs text-slate-400 flex items-center gap-1">
+                              目標: {item.target} {item.meta.unit}
+                              {item.meta.isNegative ? '(↓)' : '(↑)'}
+                            </div>
+                          </div>
+
+                          <div className="absolute bottom-4 right-4 opacity-0 group-hover:opacity-100 transform translate-x-2 group-hover:translate-x-0 transition-all">
+                            <ChevronRight className="w-5 h-5 text-blue-500" />
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {currentView === 'detail' && selectedIndicator && (
+              <div className="max-w-6xl mx-auto space-y-6 animate-in slide-in-from-right-8 duration-500">
+                <div className="bg-white p-5 sm:p-6 rounded-[2rem] shadow-sm border border-slate-200 flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+                  <div>
+                    <div className="flex items-center gap-3 mb-2">
+                      <button
+                        onClick={() => setCurrentView('overview')}
+                        className="p-1 hover:bg-slate-100 rounded-lg text-slate-400 transition-colors"
+                      >
+                        <ChevronRight className="w-5 h-5 rotate-180" />
+                      </button>
+                      <h2 className="text-xl font-bold text-slate-800">{selectedIndicator}</h2>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-3 text-sm text-slate-500 pl-9">
+                      <span className="bg-slate-100 px-2.5 py-1 rounded-md border border-slate-200">
+                        運算: {indicatorMeta[selectedIndicator].type === 'avg' ? '平均值' : '加總值'}
+                      </span>
+                      <span className="bg-slate-100 px-2.5 py-1 rounded-md border border-slate-200 flex items-center gap-1">
+                        方向:{' '}
+                        {indicatorMeta[selectedIndicator].isNegative ? (
+                          <span className="text-rose-600 font-medium">越低越好</span>
+                        ) : (
+                          <span className="text-emerald-600 font-medium">越高越好</span>
+                        )}
+                      </span>
+                      <span className="bg-slate-100 px-2.5 py-1 rounded-md border border-slate-200">
+                        單位: {indicatorMeta[selectedIndicator].unit}
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="flex bg-slate-100 p-1 rounded-xl self-start lg:self-auto">
+                    <button
+                      onClick={() => setTimeDimension('month')}
+                      className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${
+                        timeDimension === 'month'
+                          ? 'bg-white text-blue-700 shadow-sm'
+                          : 'text-slate-500 hover:text-slate-700'
+                      }`}
+                    >
+                      依月份展開
+                    </button>
+                    <button
+                      onClick={() => setTimeDimension('quarter')}
+                      className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${
+                        timeDimension === 'quarter'
+                          ? 'bg-white text-blue-700 shadow-sm'
+                          : 'text-slate-500 hover:text-slate-700'
+                      }`}
+                    >
+                      依季度聚合
+                    </button>
+                  </div>
+                </div>
+
+                <div className="bg-white p-5 sm:p-6 md:p-8 rounded-[2rem] shadow-sm border border-slate-200">
+                  <h3 className="text-slate-700 font-semibold mb-6 flex items-center gap-2">
+                    <TrendingUp className="w-5 h-5 text-blue-500" />
+                    趨勢圖表
+                  </h3>
+
+                  <div className="w-full" style={{ height: chartHeight }}>
+                    {detailChartData.length > 0 ? (
+                      <ResponsiveContainer width="100%" height="100%">
+                        {indicatorMeta[selectedIndicator].type === 'avg' ? (
+                          <LineChart data={detailChartData} margin={{ top: 24, right: 20, left: 0, bottom: 16 }}>
+                            <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
+                            <XAxis
+                              dataKey="name"
+                              axisLine={false}
+                              tickLine={false}
+                              tick={{ fill: '#64748b', fontSize: isMobile ? 10 : 12 }}
+                              dy={10}
+                              angle={xAxisAngle}
+                              textAnchor={useTiltedLabels ? 'end' : 'middle'}
+                              height={xAxisHeight}
+                              interval={0}
+                            />
+                            <YAxis
+                              axisLine={false}
+                              tickLine={false}
+                              tick={{ fill: '#64748b', fontSize: isMobile ? 10 : 12 }}
+                              dx={-10}
+                              domain={detailYAxisDomain}
+                              tickCount={6}
+                            />
+                            <Tooltip
+                              contentStyle={{
+                                borderRadius: '1rem',
+                                border: 'none',
+                                boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)',
+                              }}
+                              labelStyle={{ fontWeight: 'bold', color: '#1e293b', marginBottom: '8px' }}
+                              formatter={(value, name) => [
+                                formatDisplayValue(
+                                  value,
+                                  indicatorMeta[selectedIndicator].unit,
+                                  name === '目標值' ? 'avg' : indicatorMeta[selectedIndicator].type
+                                ),
+                                name,
+                              ]}
+                            />
+                            <Legend iconType="circle" wrapperStyle={{ paddingTop: '12px' }} />
+
+                            <Line
+                              type="monotone"
+                              dataKey="target"
+                              name="目標值"
+                              stroke="#94a3b8"
+                              strokeWidth={2}
+                              strokeDasharray="6 6"
+                              dot={false}
+                              activeDot={false}
+                            />
+                            <Line
+                              type="monotone"
+                              dataKey="value"
+                              name="監測結果"
+                              stroke="#2563eb"
+                              strokeWidth={3}
+                              dot={{ r: isMobile ? 3 : 4, strokeWidth: 2 }}
+                              activeDot={{ r: isMobile ? 5 : 6, strokeWidth: 0 }}
+                              connectNulls
+                            >
+                              <LabelList
+                                dataKey="value"
+                                position="top"
+                                formatter={(value) =>
+                                  value === null || value === undefined
+                                    ? ''
+                                    : formatDisplayValue(value, indicatorMeta[selectedIndicator].unit, 'avg')
+                                }
+                                style={{
+                                  fill: '#1e293b',
+                                  fontSize: isMobile ? 10 : 12,
+                                  fontWeight: 600,
+                                }}
+                              />
+                            </Line>
+                          </LineChart>
+                        ) : (
+                          <BarChart data={detailChartData} margin={{ top: 24, right: 20, left: 0, bottom: 16 }}>
+                            <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
+                            <XAxis
+                              dataKey="name"
+                              axisLine={false}
+                              tickLine={false}
+                              tick={{ fill: '#64748b', fontSize: isMobile ? 10 : 12 }}
+                              dy={10}
+                              angle={xAxisAngle}
+                              textAnchor={useTiltedLabels ? 'end' : 'middle'}
+                              height={xAxisHeight}
+                              interval={0}
+                            />
+                            <YAxis
+                              axisLine={false}
+                              tickLine={false}
+                              tick={{ fill: '#64748b', fontSize: isMobile ? 10 : 12 }}
+                              dx={-10}
+                              domain={detailYAxisDomain}
+                              tickCount={6}
+                            />
+                            <Tooltip
+                              contentStyle={{
+                                borderRadius: '1rem',
+                                border: 'none',
+                                boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)',
+                              }}
+                              cursor={{ fill: '#f1f5f9' }}
+                              formatter={(value, name, props) => {
+                                if (name === '監測結果') {
+                                  return [formatDisplayValue(value, indicatorMeta[selectedIndicator].unit, 'sum'), name];
+                                }
+                                return [
+                                  formatDisplayValue(props?.payload?.target, indicatorMeta[selectedIndicator].unit, 'sum'),
+                                  '目標值',
+                                ];
+                              }}
+                            />
+                            <Legend iconType="circle" wrapperStyle={{ paddingTop: '12px' }} />
+
+                            <Bar dataKey="value" name="監測結果" radius={[4, 4, 0, 0]} maxBarSize={isMobile ? 28 : 50}>
+                              <LabelList
+                                dataKey="value"
+                                position="top"
+                                formatter={(value) =>
+                                  value === null || value === undefined
+                                    ? ''
+                                    : formatDisplayValue(value, indicatorMeta[selectedIndicator].unit, 'sum')
+                                }
+                                style={{
+                                  fill: '#1e293b',
+                                  fontSize: isMobile ? 10 : 12,
+                                  fontWeight: 600,
+                                }}
+                              />
+                              {detailChartData.map((entry, index) => (
+                                <Cell key={`cell-${index}`} fill={entry.isSuccess ? '#10b981' : '#f43f5e'} />
+                              ))}
+                            </Bar>
+                          </BarChart>
+                        )}
+                      </ResponsiveContainer>
+                    ) : (
+                      <div className="h-full flex items-center justify-center text-slate-400">
+                        沒有符合篩選條件的資料可供顯示
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                <div className="bg-blue-50 border border-blue-100 rounded-[2rem] p-5 sm:p-6 md:p-8 flex gap-4 items-start shadow-sm">
+                  <div className="bg-blue-100 p-3 rounded-xl shrink-0 mt-1">
+                    <FileText className="w-6 h-6 text-blue-600" />
+                  </div>
+                  <div>
+                    <h3 className="text-lg font-bold text-blue-900 mb-2">最新檢討與改善回饋</h3>
+                    <p className="text-slate-700 leading-relaxed whitespace-pre-wrap">{latestReview}</p>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        </main>
+      </div>
     </div>
   );
 }
