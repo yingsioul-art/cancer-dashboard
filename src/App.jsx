@@ -90,6 +90,48 @@ const buildDetailPointTarget = (record, meta, mode, activeMonthCount = 1) => {
   return +((record.target * activeMonthCount) / 12).toFixed(2);
 };
 
+// 新增：依目前監測結果自動調整 Y 軸上下界
+const getDynamicYAxisDomain = (chartData, unit) => {
+  const values = chartData
+    .flatMap((item) => [item.value, item.target])
+    .filter((v) => v !== null && v !== undefined && !Number.isNaN(v));
+
+  if (!values.length) return ['auto', 'auto'];
+
+  let min = Math.min(...values);
+  let max = Math.max(...values);
+
+  if (unit === '%') {
+    const range = max - min;
+    const padding = Math.max(0.5, range * 0.8);
+
+    let domainMin = +(min - padding).toFixed(1);
+    let domainMax = +(max + padding).toFixed(1);
+
+    if (domainMax - domainMin < 2) {
+      const center = (min + max) / 2;
+      domainMin = +(center - 1).toFixed(1);
+      domainMax = +(center + 1).toFixed(1);
+    }
+
+    domainMin = Math.max(0, domainMin);
+    domainMax = Math.min(100, domainMax);
+
+    return [domainMin, domainMax];
+  }
+
+  const range = max - min;
+  const padding = Math.max(1, Math.ceil(range * 0.5));
+
+  let domainMin = Math.floor(min - padding);
+  let domainMax = Math.ceil(max + padding);
+
+  if (domainMin < 0) domainMin = 0;
+  if (domainMax === domainMin) domainMax = domainMin + 2;
+
+  return [domainMin, domainMax];
+};
+
 const getMonthlyFromRow = (row) => {
   if (Array.isArray(row.monthly)) {
     const normalized = row.monthly.slice(0, 12).map(parseMaybeNumber);
@@ -123,9 +165,10 @@ const normalizeRows = (payload) => {
     .map((row) => ({
       year: String(row.year ?? row['年度'] ?? row.Year ?? '').trim(),
       indicator: String(row.indicator ?? row['品質指標'] ?? row.Indicator ?? '').trim(),
-      target: parseMaybeNumber(
-        row.target ?? row['今年目標值(無特殊符號)'] ?? row['今年目標值'] ?? row.Target ?? 0
-      ) ?? 0,
+      target:
+        parseMaybeNumber(
+          row.target ?? row['今年目標值(無特殊符號)'] ?? row['今年目標值'] ?? row.Target ?? 0
+        ) ?? 0,
       monthly: getMonthlyFromRow(row),
       review: String(row.review ?? row['檢討與改善'] ?? row.Review ?? ''),
     }))
@@ -133,7 +176,8 @@ const normalizeRows = (payload) => {
 };
 
 const extractIndicatorMeta = (payload, rows) => {
-  const apiMeta = payload?.indicatorMeta && typeof payload.indicatorMeta === 'object' ? payload.indicatorMeta : {};
+  const apiMeta =
+    payload?.indicatorMeta && typeof payload.indicatorMeta === 'object' ? payload.indicatorMeta : {};
   const mergedMeta = { ...DEFAULT_INDICATOR_META, ...apiMeta };
 
   rows.forEach((row) => {
@@ -242,7 +286,9 @@ export default function App() {
 
   // --- 可用年份 ---
   const availableYearsList = useMemo(() => {
-    return [...new Set(rawData.map((d) => String(d.year)).filter(Boolean))].sort((a, b) => Number(a) - Number(b));
+    return [...new Set(rawData.map((d) => String(d.year)).filter(Boolean))].sort(
+      (a, b) => Number(a) - Number(b)
+    );
   }, [rawData]);
 
   // --- 資料進來後，自動勾選年份 ---
@@ -360,6 +406,12 @@ export default function App() {
     );
   }, [rawData, indicatorMeta, selectedIndicator, effectiveYears, selectedMonths, timeDimension]);
 
+  // 新增：依 detailChartData 自動算 Y 軸範圍
+  const detailYAxisDomain = useMemo(() => {
+    if (!selectedIndicator) return ['auto', 'auto'];
+    return getDynamicYAxisDomain(detailChartData, indicatorMeta[selectedIndicator]?.unit);
+  }, [detailChartData, indicatorMeta, selectedIndicator]);
+
   const latestReview = useMemo(() => {
     if (!selectedIndicator || effectiveYears.length === 0 || !rawData.length) return '暫無檢討紀錄';
     const sortedYears = [...effectiveYears].sort((a, b) => Number(b) - Number(a));
@@ -369,7 +421,9 @@ export default function App() {
 
   const toggleYear = (year) => {
     setSelectedYears((prev) =>
-      prev.includes(year) ? prev.filter((y) => y !== year) : [...prev, year].sort((a, b) => Number(a) - Number(b))
+      prev.includes(year)
+        ? prev.filter((y) => y !== year)
+        : [...prev, year].sort((a, b) => Number(a) - Number(b))
     );
   };
 
@@ -384,12 +438,6 @@ export default function App() {
   const handleIndicatorJump = (indicatorName) => {
     setSelectedIndicator(indicatorName);
     setCurrentView('detail');
-  };
-
-  const getTargetForYear = (year) => {
-    if (!selectedIndicator) return 0;
-    const record = rawData.find((d) => d.indicator === selectedIndicator && d.year === year);
-    return record ? record.target : 0;
   };
 
   if (isLoading) {
@@ -571,7 +619,8 @@ export default function App() {
                   <div className="flex items-baseline gap-3">
                     <span className="text-6xl font-bold tracking-tight">{overallSuccessRate}%</span>
                     <span className="text-blue-200 text-sm">
-                      ({overviewData.filter((d) => d.isSuccess).length} / {overviewData.filter((d) => d.value !== null).length} 達標指標)
+                      ({overviewData.filter((d) => d.isSuccess).length} /{' '}
+                      {overviewData.filter((d) => d.value !== null).length} 達標指標)
                     </span>
                   </div>
                 </div>
@@ -592,10 +641,26 @@ export default function App() {
                       onClick={() => handleIndicatorJump(item.name)}
                       className="bg-white rounded-2xl p-5 border border-slate-200 shadow-sm hover:shadow-lg hover:border-blue-300 transition-all cursor-pointer group flex flex-col h-full relative overflow-hidden"
                     >
-                      <div className={`absolute top-0 left-0 w-full h-1 ${item.isSuccess ? 'bg-emerald-500' : item.value === null ? 'bg-slate-200' : 'bg-rose-500'}`}></div>
+                      <div
+                        className={`absolute top-0 left-0 w-full h-1 ${
+                          item.isSuccess
+                            ? 'bg-emerald-500'
+                            : item.value === null
+                            ? 'bg-slate-200'
+                            : 'bg-rose-500'
+                        }`}
+                      ></div>
 
                       <div className="flex justify-between items-start mb-4 mt-1">
-                        <div className={`p-2 rounded-xl ${item.isSuccess ? 'bg-emerald-50 text-emerald-600' : item.value === null ? 'bg-slate-50 text-slate-400' : 'bg-rose-50 text-rose-600'}`}>
+                        <div
+                          className={`p-2 rounded-xl ${
+                            item.isSuccess
+                              ? 'bg-emerald-50 text-emerald-600'
+                              : item.value === null
+                              ? 'bg-slate-50 text-slate-400'
+                              : 'bg-rose-50 text-rose-600'
+                          }`}
+                        >
                           {item.isSuccess ? (
                             <CheckCircle2 className="w-5 h-5" />
                           ) : item.value === null ? (
@@ -617,10 +682,18 @@ export default function App() {
                         <div className="flex items-end gap-1 mb-1">
                           {item.value !== null ? (
                             <>
-                              <span className={`text-2xl font-bold ${item.isSuccess ? 'text-slate-800' : 'text-rose-600'}`}>
-                                {item.meta.type === 'avg' || item.meta.unit === '%' ? Number(item.value).toFixed(1) : item.value}
+                              <span
+                                className={`text-2xl font-bold ${
+                                  item.isSuccess ? 'text-slate-800' : 'text-rose-600'
+                                }`}
+                              >
+                                {item.meta.type === 'avg' || item.meta.unit === '%'
+                                  ? Number(item.value).toFixed(1)
+                                  : item.value}
                               </span>
-                              <span className="text-sm font-medium text-slate-500 mb-0.5">{item.meta.unit}</span>
+                              <span className="text-sm font-medium text-slate-500 mb-0.5">
+                                {item.meta.unit}
+                              </span>
                             </>
                           ) : (
                             <span className="text-xl font-bold text-slate-400">無資料</span>
@@ -647,7 +720,10 @@ export default function App() {
               <div className="bg-white p-6 rounded-[2rem] shadow-sm border border-slate-200 flex flex-col md:flex-row md:items-center justify-between gap-4">
                 <div>
                   <div className="flex items-center gap-3 mb-2">
-                    <button onClick={() => setCurrentView('overview')} className="p-1 hover:bg-slate-100 rounded-lg text-slate-400 transition-colors">
+                    <button
+                      onClick={() => setCurrentView('overview')}
+                      className="p-1 hover:bg-slate-100 rounded-lg text-slate-400 transition-colors"
+                    >
                       <ChevronRight className="w-5 h-5 rotate-180" />
                     </button>
                     <h2 className="text-xl font-bold text-slate-800">{selectedIndicator}</h2>
@@ -674,7 +750,9 @@ export default function App() {
                   <button
                     onClick={() => setTimeDimension('month')}
                     className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${
-                      timeDimension === 'month' ? 'bg-white text-blue-700 shadow-sm' : 'text-slate-500 hover:text-slate-700'
+                      timeDimension === 'month'
+                        ? 'bg-white text-blue-700 shadow-sm'
+                        : 'text-slate-500 hover:text-slate-700'
                     }`}
                   >
                     依月份展開
@@ -682,7 +760,9 @@ export default function App() {
                   <button
                     onClick={() => setTimeDimension('quarter')}
                     className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${
-                      timeDimension === 'quarter' ? 'bg-white text-blue-700 shadow-sm' : 'text-slate-500 hover:text-slate-700'
+                      timeDimension === 'quarter'
+                        ? 'bg-white text-blue-700 shadow-sm'
+                        : 'text-slate-500 hover:text-slate-700'
                     }`}
                   >
                     依季度聚合
@@ -717,13 +797,22 @@ export default function App() {
                             tickLine={false}
                             tick={{ fill: '#64748b', fontSize: 12 }}
                             dx={-10}
-                            domain={[80, (dataMax) => Math.max(100, Math.ceil((dataMax ?? 100) + 1))]}
+                            domain={detailYAxisDomain}
+                            tickCount={6}
                           />
                           <Tooltip
-                            contentStyle={{ borderRadius: '1rem', border: 'none', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)' }}
+                            contentStyle={{
+                              borderRadius: '1rem',
+                              border: 'none',
+                              boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)',
+                            }}
                             labelStyle={{ fontWeight: 'bold', color: '#1e293b', marginBottom: '8px' }}
                             formatter={(value, name) => [
-                              formatDisplayValue(value, indicatorMeta[selectedIndicator].unit, name === '目標值' ? 'avg' : indicatorMeta[selectedIndicator].type),
+                              formatDisplayValue(
+                                value,
+                                indicatorMeta[selectedIndicator].unit,
+                                name === '目標值' ? 'avg' : indicatorMeta[selectedIndicator].type
+                              ),
                               name,
                             ]}
                           />
@@ -775,15 +864,33 @@ export default function App() {
                             height={detailChartData.length > 8 ? 70 : 40}
                             interval={0}
                           />
-                          <YAxis axisLine={false} tickLine={false} tick={{ fill: '#64748b', fontSize: 12 }} dx={-10} />
+                          <YAxis
+                            axisLine={false}
+                            tickLine={false}
+                            tick={{ fill: '#64748b', fontSize: 12 }}
+                            dx={-10}
+                            domain={detailYAxisDomain}
+                            tickCount={6}
+                          />
                           <Tooltip
-                            contentStyle={{ borderRadius: '1rem', border: 'none', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)' }}
+                            contentStyle={{
+                              borderRadius: '1rem',
+                              border: 'none',
+                              boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)',
+                            }}
                             cursor={{ fill: '#f1f5f9' }}
                             formatter={(value, name, props) => {
                               if (name === '監測結果') {
                                 return [formatDisplayValue(value, indicatorMeta[selectedIndicator].unit, 'sum'), name];
                               }
-                              return [formatDisplayValue(props?.payload?.target, indicatorMeta[selectedIndicator].unit, 'sum'), '目標值'];
+                              return [
+                                formatDisplayValue(
+                                  props?.payload?.target,
+                                  indicatorMeta[selectedIndicator].unit,
+                                  'sum'
+                                ),
+                                '目標值',
+                              ];
                             }}
                           />
                           <Legend iconType="circle" wrapperStyle={{ paddingTop: '20px' }} />
@@ -800,10 +907,7 @@ export default function App() {
                               style={{ fill: '#1e293b', fontSize: 12, fontWeight: 600 }}
                             />
                             {detailChartData.map((entry, index) => (
-                              <Cell
-                                key={`cell-${index}`}
-                                fill={entry.isSuccess ? '#10b981' : '#f43f5e'}
-                              />
+                              <Cell key={`cell-${index}`} fill={entry.isSuccess ? '#10b981' : '#f43f5e'} />
                             ))}
                           </Bar>
                         </BarChart>
