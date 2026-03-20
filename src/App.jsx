@@ -27,6 +27,8 @@ import {
   Type,
   Gauge,
   Activity,
+  ArrowUpCircle,
+  ArrowDownCircle,
 } from 'lucide-react';
 
 // 請將圖片放在 public/ntuh-logo.png
@@ -151,11 +153,7 @@ const INDICATOR_CATEGORY_MAP = Object.entries(CATEGORY_DEFINITIONS).reduce(
 );
 
 const strokeCollator = new Intl.Collator('zh-Hant-u-co-stroke');
-
 const sortByStroke = (list) => [...list].sort((a, b) => strokeCollator.compare(a, b));
-
-const isValidNumberValue = (value) =>
-  value !== null && value !== undefined && !Number.isNaN(value);
 
 const normalizeIndicatorName = (value) => {
   const normalized = String(value || '').trim();
@@ -517,10 +515,10 @@ function SpeedometerChart({ value }) {
   );
 }
 
-function MiniGaugeChart({ progress, isSuccess, hasData }) {
+function SegmentedMiniGaugeChart({ progress, hasData }) {
   if (!hasData) {
     return (
-      <div className="flex h-[120px] items-center justify-center text-sm text-slate-400">
+      <div className="flex h-[128px] items-center justify-center text-sm text-slate-400">
         無資料
       </div>
     );
@@ -528,41 +526,62 @@ function MiniGaugeChart({ progress, isSuccess, hasData }) {
 
   const safeValue = Math.max(0, Math.min(100, progress || 0));
   const cx = 90;
-  const cy = 90;
-  const r = 52;
-  const endAngle = 180 + (safeValue / 100) * 180;
-  const activeStroke = isSuccess ? '#10b981' : '#f43f5e';
+  const cy = 92;
+  const r = 54;
+
+  const pointerAngle = 180 + (safeValue / 100) * 180;
+  const pointer = polarToCartesian(cx, cy, r - 6, pointerAngle);
 
   return (
     <div className="flex items-center justify-center">
-      <svg width="180" height="120" viewBox="0 0 180 120">
+      <svg width="180" height="128" viewBox="0 0 180 128">
         <path
-          d={describeArc(cx, cy, r, 180, 360)}
+          d={describeArc(cx, cy, r, 180, 286.2)}
           fill="none"
-          stroke="#e2e8f0"
+          stroke="#ef4444"
           strokeWidth="14"
           strokeLinecap="round"
         />
         <path
-          d={describeArc(cx, cy, r, 180, endAngle)}
+          d={describeArc(cx, cy, r, 288, 331.2)}
           fill="none"
-          stroke={activeStroke}
+          stroke="#f59e0b"
           strokeWidth="14"
           strokeLinecap="round"
         />
+        <path
+          d={describeArc(cx, cy, r, 333, 360)}
+          fill="none"
+          stroke="#22c55e"
+          strokeWidth="14"
+          strokeLinecap="round"
+        />
+
+        <line
+          x1={cx}
+          y1={cy}
+          x2={pointer.x}
+          y2={pointer.y}
+          stroke="#0f172a"
+          strokeWidth="4"
+          strokeLinecap="round"
+        />
+        <circle cx={cx} cy={cy} r="5.5" fill="#0f172a" />
+
         <text
           x="90"
           y="78"
           textAnchor="middle"
-          fill={isSuccess ? '#047857' : '#be123c'}
+          fill="#0f172a"
           fontSize="22"
           fontWeight="700"
         >
           {safeValue}%
         </text>
+
         <text
-          x="42"
-          y="110"
+          x="38"
+          y="118"
           textAnchor="middle"
           fill="#94a3b8"
           fontSize="10"
@@ -571,8 +590,18 @@ function MiniGaugeChart({ progress, isSuccess, hasData }) {
           0
         </text>
         <text
-          x="138"
-          y="110"
+          x="90"
+          y="20"
+          textAnchor="middle"
+          fill="#94a3b8"
+          fontSize="10"
+          fontWeight="700"
+        >
+          50
+        </text>
+        <text
+          x="142"
+          y="118"
           textAnchor="middle"
           fill="#94a3b8"
           fontSize="10"
@@ -1211,10 +1240,24 @@ export default function App() {
                             監測年度：{formatMonitoringYears(item.monitoringYears)}
                           </div>
 
-                          <div className="mb-2">
-                            <MiniGaugeChart
+                          <div className="mb-2 flex items-center gap-2">
+                            {item.meta.isNegative ? (
+                              <ArrowDownCircle className="w-4 h-4 text-rose-500" />
+                            ) : (
+                              <ArrowUpCircle className="w-4 h-4 text-emerald-500" />
+                            )}
+                            <span
+                              className={`text-xs ${
+                                item.meta.isNegative ? 'text-rose-600' : 'text-emerald-600'
+                              }`}
+                            >
+                              {item.meta.isNegative ? '負向指標（越低越好）' : '正向指標（越高越好）'}
+                            </span>
+                          </div>
+
+                          <div className="mb-3 rounded-2xl bg-slate-50 py-2">
+                            <SegmentedMiniGaugeChart
                               progress={item.gaugeProgress}
-                              isSuccess={!!item.isSuccess}
                               hasData={item.value !== null}
                             />
                           </div>
@@ -1223,28 +1266,35 @@ export default function App() {
                             {item.name}
                           </h4>
 
-                          <div className="mt-auto">
-                            <div className="mb-1 flex items-end gap-1">
-                              {item.value !== null ? (
-                                <>
-                                  <span
-                                    className={`text-2xl ${
-                                      item.isSuccess ? 'text-slate-800' : 'text-rose-600'
-                                    }`}
-                                  >
-                                    {item.meta.type === 'avg' || item.meta.unit === '%'
-                                      ? Number(item.value).toFixed(1)
-                                      : item.value}
-                                  </span>
-                                  <span className="mb-0.5 text-sm text-slate-500">{item.meta.unit}</span>
-                                </>
-                              ) : (
-                                <span className="text-xl text-slate-400">無資料</span>
-                              )}
+                          <div className="mt-auto grid grid-cols-2 gap-3">
+                            <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+                              <div className="mb-1 text-xs text-slate-400">監測結果</div>
+                              <div
+                                className={`text-2xl ${
+                                  item.isSuccess ? 'text-slate-800' : 'text-rose-600'
+                                }`}
+                              >
+                                {item.value !== null
+                                  ? item.meta.type === 'avg' || item.meta.unit === '%'
+                                    ? Number(item.value).toFixed(1)
+                                    : item.value
+                                  : '--'}
+                              </div>
+                              <div className="text-sm text-slate-500">{item.meta.unit}</div>
                             </div>
-                            <div className="text-xs text-slate-400">
-                              目標: {item.target} {item.meta.unit}
-                              {item.meta.isNegative ? '(↓)' : '(↑)'}
+
+                            <div className="rounded-xl border border-blue-200 bg-blue-50 p-3">
+                              <div className="mb-1 text-xs text-blue-500">目標值</div>
+                              <div className="text-2xl text-blue-700">
+                                {item.target !== null && item.target !== undefined
+                                  ? item.meta.type === 'avg' || item.meta.unit === '%'
+                                    ? Number(item.target).toFixed(1)
+                                    : item.target
+                                  : '--'}
+                              </div>
+                              <div className="text-sm text-blue-500">
+                                {item.meta.unit} {item.meta.isNegative ? '(↓)' : '(↑)'}
+                              </div>
                             </div>
                           </div>
 
@@ -1459,7 +1509,7 @@ export default function App() {
                           )}
                         </ResponsiveContainer>
                       ) : (
-                        <div className="flex h-full items-center justify-center text-slate-400">
+                        <div className="flex h-full items-center justify-center text-slate-400">  
                           沒有符合篩選條件的資料可供顯示
                         </div>
                       )}
