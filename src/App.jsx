@@ -39,10 +39,10 @@ const API_URL =
   'https://script.google.com/macros/s/AKfycbzjJgyMDSWmNzzowWRuxY5O2OrIWnIRXkpc4gMTUPVjGN49_Fi_c4RxC5k8AbjkRSY/exec';
 
 const FONT_SCALE_OPTIONS = [
-  { key: 'sm', label: '小', value: 0.92 },
-  { key: 'md', label: '中', value: 1 },
-  { key: 'lg', label: '大', value: 1.12 },
-  { key: 'xl', label: '特大', value: 1.24 },
+  { key: 'sm', label: '小', value: 0.92, titleClass: 'text-sm' },
+  { key: 'md', label: '中', value: 1, titleClass: 'text-base' },
+  { key: 'lg', label: '大', value: 1.14, titleClass: 'text-lg' },
+  { key: 'xl', label: '特大', value: 1.28, titleClass: 'text-xl' },
 ];
 
 const QUARTER_OPTIONS = [
@@ -192,33 +192,46 @@ const parseMaybeNumber = (value) => {
   return Number.isNaN(num) ? null : num;
 };
 
-const getSelectedMonths = (selectedQuarter, selectedMonth) => {
-  if (selectedMonth) return [selectedMonth];
-  if (selectedQuarter) {
-    return QUARTER_OPTIONS.find((item) => item.key === selectedQuarter)?.months || [];
-  }
+const getSelectedMonths = (selectedQuarters, selectedMonths) => {
+  const monthsFromQuarters = selectedQuarters.flatMap((quarterKey) => {
+    const found = QUARTER_OPTIONS.find((item) => item.key === quarterKey);
+    return found ? found.months : [];
+  });
+
+  const merged = [...monthsFromQuarters, ...selectedMonths];
+  const uniqueSorted = [...new Set(merged)].sort((a, b) => a - b);
+
+  if (uniqueSorted.length > 0) return uniqueSorted;
   return Array.from({ length: 12 }, (_, index) => index + 1);
 };
 
-const getPeriodLabel = (selectedQuarter, selectedMonth) => {
-  if (selectedMonth) return `${selectedMonth}月同期比較`;
-  if (selectedQuarter) {
-    return `${QUARTER_OPTIONS.find((item) => item.key === selectedQuarter)?.label || selectedQuarter}同期比較`;
-  }
-  return '年度比較';
+const getPeriodLabel = (selectedQuarters, selectedMonths, effectiveMonths) => {
+  if (selectedQuarters.length === 0 && selectedMonths.length === 0) return '年度比較';
+
+  const quarterLabels = selectedQuarters
+    .map((key) => QUARTER_OPTIONS.find((item) => item.key === key)?.label)
+    .filter(Boolean);
+
+  const monthLabels = selectedMonths
+    .slice()
+    .sort((a, b) => a - b)
+    .map((month) => `${month}月`);
+
+  const labels = [...quarterLabels, ...monthLabels];
+
+  if (labels.length > 0) return `${labels.join('、')} 比較`;
+
+  return `${effectiveMonths.join('、')}月比較`;
 };
 
-const getPeriodValueLabel = (selectedQuarter, selectedMonth) => {
-  if (selectedMonth) return `${selectedMonth}月監測結果`;
-  if (selectedQuarter) {
-    return `${QUARTER_OPTIONS.find((item) => item.key === selectedQuarter)?.label || selectedQuarter}監測結果`;
-  }
-  return '年度監測結果';
+const getPeriodValueLabel = (selectedQuarters, selectedMonths) => {
+  if (selectedQuarters.length === 0 && selectedMonths.length === 0) return '年度監測結果';
+  return '所選區間監測結果';
 };
 
-const getPeriodValues = (monthly, selectedMonths) => {
+const getPeriodValues = (monthly, effectiveMonths) => {
   if (!Array.isArray(monthly)) return [];
-  return selectedMonths
+  return effectiveMonths
     .map((month) => monthly[month - 1])
     .filter((value) => isValidNumberValue(value));
 };
@@ -301,11 +314,11 @@ const getMonthlyFromRow = (row) => {
   return monthly;
 };
 
-const rowHasMonitoringResult = (row, selectedMonths = null) => {
+const rowHasMonitoringResult = (row, effectiveMonths = null) => {
   if (!row || !Array.isArray(row.monthly)) return false;
   const values =
-    Array.isArray(selectedMonths) && selectedMonths.length
-      ? selectedMonths.map((month) => row.monthly[month - 1])
+    Array.isArray(effectiveMonths) && effectiveMonths.length
+      ? effectiveMonths.map((month) => row.monthly[month - 1])
       : row.monthly;
   return values.some((value) => isValidNumberValue(value));
 };
@@ -569,8 +582,8 @@ export default function App() {
   const [apiMessage, setApiMessage] = useState('正在載入線上資料...');
 
   const [selectedYears, setSelectedYears] = useState([]);
-  const [selectedQuarter, setSelectedQuarter] = useState(null);
-  const [selectedMonth, setSelectedMonth] = useState(null);
+  const [selectedQuarters, setSelectedQuarters] = useState([]);
+  const [selectedMonths, setSelectedMonths] = useState([]);
   const [currentView, setCurrentView] = useState('overview');
   const [selectedIndicator, setSelectedIndicator] = useState(null);
   const [fontScaleKey, setFontScaleKey] = useState('md');
@@ -582,6 +595,9 @@ export default function App() {
 
   const fontScale =
     FONT_SCALE_OPTIONS.find((item) => item.key === fontScaleKey)?.value ?? 1;
+
+  const indicatorTitleClass =
+    FONT_SCALE_OPTIONS.find((item) => item.key === fontScaleKey)?.titleClass ?? 'text-base';
 
   useEffect(() => {
     const handleResize = () => setViewportWidth(window.innerWidth);
@@ -641,28 +657,31 @@ export default function App() {
   }, [availableYearsList]);
 
   const effectiveYears = selectedYears.length ? selectedYears : availableYearsList;
-  const selectedMonths = useMemo(
-    () => getSelectedMonths(selectedQuarter, selectedMonth),
-    [selectedQuarter, selectedMonth]
+
+  const effectiveMonths = useMemo(
+    () => getSelectedMonths(selectedQuarters, selectedMonths),
+    [selectedQuarters, selectedMonths]
   );
+
   const periodLabel = useMemo(
-    () => getPeriodLabel(selectedQuarter, selectedMonth),
-    [selectedQuarter, selectedMonth]
+    () => getPeriodLabel(selectedQuarters, selectedMonths, effectiveMonths),
+    [selectedQuarters, selectedMonths, effectiveMonths]
   );
+
   const periodValueLabel = useMemo(
-    () => getPeriodValueLabel(selectedQuarter, selectedMonth),
-    [selectedQuarter, selectedMonth]
+    () => getPeriodValueLabel(selectedQuarters, selectedMonths),
+    [selectedQuarters, selectedMonths]
   );
 
   const availableIndicatorNames = useMemo(() => {
     const indicators = rawData
       .filter(
-        (row) => effectiveYears.includes(row.year) && rowHasMonitoringResult(row, selectedMonths)
+        (row) => effectiveYears.includes(row.year) && rowHasMonitoringResult(row, effectiveMonths)
       )
       .map((row) => row.indicator);
 
     return sortByStroke([...new Set(indicators)]);
-  }, [rawData, effectiveYears, selectedMonths]);
+  }, [rawData, effectiveYears, effectiveMonths]);
 
   useEffect(() => {
     if (!selectedIndicator) return;
@@ -714,7 +733,7 @@ export default function App() {
           (d) =>
             d.indicator === indicatorName &&
             effectiveYears.includes(d.year) &&
-            rowHasMonitoringResult(d, selectedMonths)
+            rowHasMonitoringResult(d, effectiveMonths)
         )
         .sort((a, b) => Number(a.year) - Number(b.year));
 
@@ -722,7 +741,7 @@ export default function App() {
       let latestTarget = 0;
 
       indicatorRecords.forEach((record) => {
-        const periodValues = getPeriodValues(record.monthly, selectedMonths);
+        const periodValues = getPeriodValues(record.monthly, effectiveMonths);
         allRelevantValues = [...allRelevantValues, ...periodValues];
         latestTarget = record.target;
       });
@@ -746,7 +765,7 @@ export default function App() {
         gaugeProgress,
       };
     });
-  }, [rawData, indicatorMeta, availableIndicatorNames, effectiveYears, selectedMonths]);
+  }, [rawData, indicatorMeta, availableIndicatorNames, effectiveYears, effectiveMonths]);
 
   const groupedOverviewData = useMemo(() => {
     return availableIndicatorGroups
@@ -775,11 +794,11 @@ export default function App() {
         (d) =>
           d.indicator === selectedIndicator &&
           effectiveYears.includes(d.year) &&
-          rowHasMonitoringResult(d, selectedMonths)
+          rowHasMonitoringResult(d, effectiveMonths)
       )
       .sort((a, b) => Number(a.year) - Number(b.year))
       .map((record) => {
-        const value = calculateAggregate(getPeriodValues(record.monthly, selectedMonths), meta.type);
+        const value = calculateAggregate(getPeriodValues(record.monthly, effectiveMonths), meta.type);
         if (value === null) return null;
         return {
           name: `${record.year}年`,
@@ -790,7 +809,7 @@ export default function App() {
         };
       })
       .filter(Boolean);
-  }, [rawData, indicatorMeta, selectedIndicator, effectiveYears, selectedMonths]);
+  }, [rawData, indicatorMeta, selectedIndicator, effectiveYears, effectiveMonths]);
 
   const detailYAxisDomain = useMemo(() => {
     if (!selectedIndicator) return ['auto', 'auto'];
@@ -841,14 +860,28 @@ export default function App() {
     });
   };
 
-  const handleQuarterSelect = (quarterKey) => {
-    setSelectedQuarter((prev) => (prev === quarterKey ? null : quarterKey));
-    setSelectedMonth(null);
+  const toggleQuarter = (quarterKey) => {
+    setSelectedQuarters((prev) =>
+      prev.includes(quarterKey)
+        ? prev.filter((key) => key !== quarterKey)
+        : [...prev, quarterKey].sort((a, b) => {
+            const order = ['Q1', 'Q2', 'Q3', 'Q4'];
+            return order.indexOf(a) - order.indexOf(b);
+          })
+    );
   };
 
-  const handleMonthSelect = (month) => {
-    setSelectedMonth((prev) => (prev === month ? null : month));
-    setSelectedQuarter(null);
+  const toggleMonth = (month) => {
+    setSelectedMonths((prev) =>
+      prev.includes(month)
+        ? prev.filter((item) => item !== month)
+        : [...prev, month].sort((a, b) => a - b)
+    );
+  };
+
+  const clearPeriodSelection = () => {
+    setSelectedQuarters([]);
+    setSelectedMonths([]);
   };
 
   const cycleFontScale = () => {
@@ -933,11 +966,11 @@ export default function App() {
                     type="button"
                     onClick={cycleFontScale}
                     className="rounded-lg p-1 text-slate-500 transition-colors hover:bg-slate-100 hover:text-blue-700"
-                    title="點一下切換字體大小"
+                    title="點一下切換指標名稱字體大小"
                   >
                     <Type className="h-4 w-4" />
                   </button>
-                  <span>字體大小</span>
+                  <span>指標名稱字體大小</span>
                 </div>
                 <span className="rounded-lg bg-slate-100 px-2 py-1 text-xs text-slate-500">
                   目前：{FONT_SCALE_OPTIONS.find((item) => item.key === fontScaleKey)?.label}
@@ -989,15 +1022,15 @@ export default function App() {
             <div className="space-y-3">
               <div className="flex items-center gap-2 text-sm text-slate-700">
                 <CalendarDays className="h-4 w-4 text-slate-400" />
-                <span>季別同期比較</span>
+                <span>季別多選</span>
               </div>
               <div className="grid grid-cols-2 gap-2">
                 {QUARTER_OPTIONS.map((option) => (
                   <button
                     key={option.key}
-                    onClick={() => handleQuarterSelect(option.key)}
+                    onClick={() => toggleQuarter(option.key)}
                     className={`rounded-xl border px-3 py-2 text-sm transition-all ${
-                      selectedQuarter === option.key
+                      selectedQuarters.includes(option.key)
                         ? 'border-indigo-200 bg-indigo-50 text-indigo-700 shadow-sm'
                         : 'border-slate-200 bg-white text-slate-500 hover:bg-slate-50'
                     }`}
@@ -1011,15 +1044,15 @@ export default function App() {
             <div className="space-y-3">
               <div className="flex items-center gap-2 text-sm text-slate-700">
                 <CalendarDays className="h-4 w-4 text-slate-400" />
-                <span>月份同期比較</span>
+                <span>月份多選</span>
               </div>
               <div className="grid grid-cols-3 gap-2">
                 {MONTH_OPTIONS.map((option) => (
                   <button
                     key={option.value}
-                    onClick={() => handleMonthSelect(option.value)}
+                    onClick={() => toggleMonth(option.value)}
                     className={`rounded-xl border px-3 py-2 text-sm transition-all ${
-                      selectedMonth === option.value
+                      selectedMonths.includes(option.value)
                         ? 'border-emerald-200 bg-emerald-50 text-emerald-700 shadow-sm'
                         : 'border-slate-200 bg-white text-slate-500 hover:bg-slate-50'
                     }`}
@@ -1028,12 +1061,14 @@ export default function App() {
                   </button>
                 ))}
               </div>
+
+              <div className="rounded-xl bg-slate-50 px-3 py-2 text-xs leading-relaxed text-slate-500">
+                目前比較月份：{effectiveMonths.map((month) => `${month}月`).join('、')}
+              </div>
+
               <button
                 type="button"
-                onClick={() => {
-                  setSelectedQuarter(null);
-                  setSelectedMonth(null);
-                }}
+                onClick={clearPeriodSelection}
                 className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-600 transition-colors hover:bg-slate-100"
               >
                 清除季別 / 月份，回到年度比較
@@ -1236,7 +1271,9 @@ export default function App() {
                             />
                           </div>
 
-                          <h4 className="mb-4 flex-1 text-sm leading-snug text-slate-700 transition-colors group-hover:text-blue-700">
+                          <h4
+                            className={`mb-4 flex-1 leading-snug text-slate-700 transition-colors group-hover:text-blue-700 ${indicatorTitleClass}`}
+                          >
                             {item.name}
                           </h4>
 
@@ -1286,7 +1323,9 @@ export default function App() {
                       >
                         <ChevronRight className="h-5 w-5 rotate-180" />
                       </button>
-                      <h2 className="text-xl text-slate-800">{selectedIndicator}</h2>
+                      <h2 className={`${indicatorTitleClass} font-bold text-slate-800`}>
+                        {selectedIndicator}
+                      </h2>
                     </div>
                     <div className="flex flex-wrap items-center gap-3 pl-9 text-sm text-slate-500">
                       <span className="rounded-md border border-slate-200 bg-slate-100 px-2.5 py-1">
