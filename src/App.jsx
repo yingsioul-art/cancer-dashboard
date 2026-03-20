@@ -1,3 +1,5 @@
+'use client';
+
 import React, { useEffect, useMemo, useState } from 'react';
 import {
   LineChart,
@@ -27,6 +29,8 @@ import {
   Type,
   Gauge,
   Activity,
+  ArrowUpCircle,
+  ArrowDownCircle,
 } from 'lucide-react';
 
 // 請將圖片放在 public/ntuh-logo.png
@@ -150,7 +154,13 @@ const INDICATOR_CATEGORY_MAP = Object.entries(CATEGORY_DEFINITIONS).reduce(
   {}
 );
 
-const strokeCollator = new Intl.Collator('zh-Hant-u-co-stroke');
+const strokeCollator = (() => {
+  try {
+    return new Intl.Collator('zh-Hant-u-co-stroke');
+  } catch {
+    return new Intl.Collator('zh-Hant');
+  }
+})();
 
 const sortByStroke = (list) => [...list].sort((a, b) => strokeCollator.compare(a, b));
 
@@ -327,30 +337,71 @@ const extractIndicatorMeta = (payload, rows) => {
   return mergedMeta;
 };
 
+const parsePayloadText = (text) => {
+  const trimmed = String(text || '').trim();
+  if (!trimmed) return [];
+
+  try {
+    return JSON.parse(trimmed);
+  } catch {
+    // 不是 JSON，就繼續試 JSONP
+  }
+
+  const match = trimmed.match(/^[^(]+\(([\s\S]*)\)\s*;?\s*$/);
+  if (match?.[1]) {
+    return JSON.parse(match[1]);
+  }
+
+  throw new Error('API 回傳格式不是 JSON / JSONP');
+};
+
 const loadJsonp = (url) =>
   new Promise((resolve, reject) => {
     const callbackName = `dashboardJsonp_${Date.now()}_${Math.floor(Math.random() * 10000)}`;
     const script = document.createElement('script');
-
-    window[callbackName] = (data) => {
-      resolve(data);
-      cleanup();
-    };
+    let timeoutId = null;
 
     const cleanup = () => {
-      delete window[callbackName];
+      if (timeoutId) window.clearTimeout(timeoutId);
+      try {
+        delete window[callbackName];
+      } catch {
+        window[callbackName] = undefined;
+      }
       if (script.parentNode) script.parentNode.removeChild(script);
+    };
+
+    window[callbackName] = (data) => {
+      cleanup();
+      resolve(data);
     };
 
     script.src = `${url}${url.includes('?') ? '&' : '?'}callback=${callbackName}`;
     script.async = true;
+
     script.onerror = () => {
       cleanup();
       reject(new Error('JSONP 載入失敗'));
     };
 
+    timeoutId = window.setTimeout(() => {
+      cleanup();
+      reject(new Error('JSONP 連線逾時'));
+    }, 12000);
+
     document.body.appendChild(script);
   });
+
+const loadRemotePayload = async (url) => {
+  try {
+    const response = await fetch(url, { method: 'GET' });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const text = await response.text();
+    return parsePayloadText(text);
+  } catch {
+    return loadJsonp(url);
+  }
+};
 
 const formatMonitoringYears = (years) => {
   if (!years || years.length === 0) return '無監測年度';
@@ -398,35 +449,8 @@ function GaugeChart({ value }) {
           strokeWidth="20"
           strokeLinecap="round"
         />
-        <text
-          x="130"
-          y="112"
-          textAnchor="middle"
-          fill="white"
-          fontSize="36"
-          fontWeight="700"
-        >
+        <text x="130" y="112" textAnchor="middle" fill="white" fontSize="36" fontWeight="700">
           {safeValue}%
-        </text>
-        <text
-          x="46"
-          y="150"
-          textAnchor="middle"
-          fill="rgba(255,255,255,0.85)"
-          fontSize="12"
-          fontWeight="700"
-        >
-          0
-        </text>
-        <text
-          x="214"
-          y="150"
-          textAnchor="middle"
-          fill="rgba(255,255,255,0.85)"
-          fontSize="12"
-          fontWeight="700"
-        >
-          100
         </text>
       </svg>
     </div>
@@ -441,144 +465,41 @@ function SpeedometerChart({ value }) {
   return (
     <div className="flex flex-col items-center justify-center">
       <svg width="260" height="170" viewBox="0 0 260 170">
-        <path
-          d={describeArc(130, 130, 88, 180, 240)}
-          fill="none"
-          stroke="#f59e0b"
-          strokeWidth="20"
-          strokeLinecap="round"
-        />
-        <path
-          d={describeArc(130, 130, 88, 240, 300)}
-          fill="none"
-          stroke="#22c55e"
-          strokeWidth="20"
-          strokeLinecap="round"
-        />
-        <path
-          d={describeArc(130, 130, 88, 300, 360)}
-          fill="none"
-          stroke="#3b82f6"
-          strokeWidth="20"
-          strokeLinecap="round"
-        />
-        <line
-          x1="130"
-          y1="130"
-          x2={pointer.x}
-          y2={pointer.y}
-          stroke="white"
-          strokeWidth="5"
-          strokeLinecap="round"
-        />
+        <path d={describeArc(130, 130, 88, 180, 240)} fill="none" stroke="#ef4444" strokeWidth="20" strokeLinecap="round" />
+        <path d={describeArc(130, 130, 88, 240, 300)} fill="none" stroke="#f59e0b" strokeWidth="20" strokeLinecap="round" />
+        <path d={describeArc(130, 130, 88, 300, 360)} fill="none" stroke="#22c55e" strokeWidth="20" strokeLinecap="round" />
+        <line x1="130" y1="130" x2={pointer.x} y2={pointer.y} stroke="white" strokeWidth="5" strokeLinecap="round" />
         <circle cx="130" cy="130" r="8" fill="white" />
-        <text
-          x="130"
-          y="112"
-          textAnchor="middle"
-          fill="white"
-          fontSize="34"
-          fontWeight="700"
-        >
+        <text x="130" y="112" textAnchor="middle" fill="white" fontSize="34" fontWeight="700">
           {safeValue}%
-        </text>
-        <text
-          x="46"
-          y="150"
-          textAnchor="middle"
-          fill="rgba(255,255,255,0.85)"
-          fontSize="12"
-          fontWeight="700"
-        >
-          0
-        </text>
-        <text
-          x="130"
-          y="20"
-          textAnchor="middle"
-          fill="rgba(255,255,255,0.85)"
-          fontSize="12"
-          fontWeight="700"
-        >
-          50
-        </text>
-        <text
-          x="214"
-          y="150"
-          textAnchor="middle"
-          fill="rgba(255,255,255,0.85)"
-          fontSize="12"
-          fontWeight="700"
-        >
-          100
         </text>
       </svg>
     </div>
   );
 }
 
-function MiniGaugeChart({ progress, isSuccess, hasData }) {
+function SegmentedMiniGaugeChart({ progress, hasData }) {
   if (!hasData) {
-    return (
-      <div className="flex h-[120px] items-center justify-center text-sm text-slate-400">
-        無資料
-      </div>
-    );
+    return <div className="flex h-[128px] items-center justify-center text-sm text-slate-400">無資料</div>;
   }
 
   const safeValue = Math.max(0, Math.min(100, progress || 0));
   const cx = 90;
-  const cy = 90;
-  const r = 52;
-  const endAngle = 180 + (safeValue / 100) * 180;
-  const activeStroke = isSuccess ? '#10b981' : '#f43f5e';
+  const cy = 92;
+  const r = 54;
+  const pointerAngle = 180 + (safeValue / 100) * 180;
+  const pointer = polarToCartesian(cx, cy, r - 6, pointerAngle);
 
   return (
     <div className="flex items-center justify-center">
-      <svg width="180" height="120" viewBox="0 0 180 120">
-        <path
-          d={describeArc(cx, cy, r, 180, 360)}
-          fill="none"
-          stroke="#e2e8f0"
-          strokeWidth="14"
-          strokeLinecap="round"
-        />
-        <path
-          d={describeArc(cx, cy, r, 180, endAngle)}
-          fill="none"
-          stroke={activeStroke}
-          strokeWidth="14"
-          strokeLinecap="round"
-        />
-        <text
-          x="90"
-          y="78"
-          textAnchor="middle"
-          fill={isSuccess ? '#047857' : '#be123c'}
-          fontSize="22"
-          fontWeight="700"
-        >
+      <svg width="180" height="128" viewBox="0 0 180 128">
+        <path d={describeArc(cx, cy, r, 180, 286.2)} fill="none" stroke="#ef4444" strokeWidth="14" strokeLinecap="round" />
+        <path d={describeArc(cx, cy, r, 288, 331.2)} fill="none" stroke="#f59e0b" strokeWidth="14" strokeLinecap="round" />
+        <path d={describeArc(cx, cy, r, 333, 360)} fill="none" stroke="#22c55e" strokeWidth="14" strokeLinecap="round" />
+        <line x1={cx} y1={cy} x2={pointer.x} y2={pointer.y} stroke="#0f172a" strokeWidth="4" strokeLinecap="round" />
+        <circle cx={cx} cy={cy} r="5.5" fill="#0f172a" />
+        <text x="90" y="78" textAnchor="middle" fill="#0f172a" fontSize="22" fontWeight="700">
           {safeValue}%
-        </text>
-        <text
-          x="42"
-          y="110"
-          textAnchor="middle"
-          fill="#94a3b8"
-          fontSize="10"
-          fontWeight="700"
-        >
-          0
-        </text>
-        <text
-          x="138"
-          y="110"
-          textAnchor="middle"
-          fill="#94a3b8"
-          fontSize="10"
-          fontWeight="700"
-        >
-          100
         </text>
       </svg>
     </div>
@@ -624,7 +545,6 @@ export default function App() {
       window.addEventListener('resize', handleResize);
       return () => window.removeEventListener('resize', handleResize);
     }
-    return undefined;
   }, []);
 
   useEffect(() => {
@@ -635,21 +555,7 @@ export default function App() {
         setApiStatus('loading');
         setApiMessage('正在載入線上資料...');
 
-        let payload = null;
-        let directFetchError = null;
-
-        try {
-          const response = await fetch(API_URL, { method: 'GET' });
-          if (!response.ok) throw new Error(`HTTP ${response.status}`);
-          payload = await response.json();
-        } catch (fetchError) {
-          directFetchError = fetchError;
-        }
-
-        if (!payload) {
-          payload = await loadJsonp(API_URL);
-        }
-
+        const payload = await loadRemotePayload(API_URL);
         const rows = normalizeRows(payload);
         const meta = extractIndicatorMeta(payload, rows);
 
@@ -662,15 +568,12 @@ export default function App() {
         } else {
           setApiStatus('empty');
           setApiMessage('API 有回應，但 rawData 是空的');
-          if (directFetchError) {
-            console.warn('Direct fetch failed, JSONP returned empty payload:', directFetchError);
-          }
         }
       } catch (err) {
         console.error('Load data error:', err);
         setError('無法取得資料，請確認 Apps Script 是否已重新部署，且網址可正常開啟。');
         setApiStatus('error');
-        setApiMessage(err.message || '無法載入資料');
+        setApiMessage(err?.message || '無法載入資料');
       } finally {
         setIsLoading(false);
       }
@@ -697,9 +600,7 @@ export default function App() {
 
   const availableIndicatorNames = useMemo(() => {
     const indicators = rawData
-      .filter(
-        (row) => effectiveYears.includes(row.year) && rowHasMonitoringResult(row)
-      )
+      .filter((row) => effectiveYears.includes(row.year) && rowHasMonitoringResult(row))
       .map((row) => row.indicator);
 
     return sortByStroke([...new Set(indicators)]);
@@ -774,11 +675,7 @@ export default function App() {
 
       const calculatedValue = calculateAggregate(allRelevantValues, meta.type);
       const isSuccess = checkIsSuccess(calculatedValue, latestTarget, meta.isNegative);
-      const gaugeProgress = getIndicatorGaugeProgress(
-        calculatedValue,
-        latestTarget,
-        meta.isNegative
-      );
+      const gaugeProgress = getIndicatorGaugeProgress(calculatedValue, latestTarget, meta.isNegative);
 
       return {
         name: indicatorName,
@@ -813,7 +710,6 @@ export default function App() {
 
   const detailChartData = useMemo(() => {
     if (!selectedIndicator || !rawData.length) return [];
-
     const meta = indicatorMeta[selectedIndicator] || inferIndicatorMetaFromName(selectedIndicator);
 
     return rawData
@@ -885,19 +781,16 @@ export default function App() {
   };
 
   const rootFontStyle = {
-    fontFamily: '"Microsoft YaHei", "Microsoft JhengHei", sans-serif',
+    fontFamily: '"Microsoft JhengHei", "PingFang TC", sans-serif',
     fontWeight: 700,
     fontSize: `${fontScale}rem`,
   };
 
   if (isLoading) {
     return (
-      <div
-        className="flex min-h-screen items-center justify-center bg-slate-50"
-        style={rootFontStyle}
-      >
+      <div className="flex min-h-screen items-center justify-center bg-slate-50" style={rootFontStyle}>
         <div className="flex flex-col items-center gap-4 text-blue-600">
-          <Loader2 className="w-10 h-10 animate-spin" />
+          <Loader2 className="h-10 w-10 animate-spin" />
           <p className="tracking-wide text-slate-600">載入雲端資料庫中，請稍候...</p>
         </div>
       </div>
@@ -906,12 +799,9 @@ export default function App() {
 
   if (error) {
     return (
-      <div
-        className="flex min-h-screen items-center justify-center bg-slate-50 p-4"
-        style={rootFontStyle}
-      >
+      <div className="flex min-h-screen items-center justify-center bg-slate-50 p-4" style={rootFontStyle}>
         <div className="flex max-w-md flex-col items-center gap-4 rounded-2xl border border-rose-100 bg-rose-50 p-8 text-center text-rose-500 shadow-sm">
-          <AlertCircle className="w-12 h-12" />
+          <AlertCircle className="h-12 w-12" />
           <h2 className="text-xl">資料連線失敗</h2>
           <p className="text-sm text-slate-600">{error}</p>
           <button
@@ -926,10 +816,7 @@ export default function App() {
   }
 
   return (
-    <div
-      className="min-h-screen bg-slate-50 text-slate-800"
-      style={rootFontStyle}
-    >
+    <div className="min-h-screen bg-slate-50 text-slate-800" style={rootFontStyle}>
       <div className="flex min-h-screen flex-col xl:flex-row">
         <aside className="z-10 w-full border-b border-slate-200 bg-white shadow-sm xl:w-80 xl:border-b-0 xl:border-r">
           <div className="border-b border-slate-100 p-6">
@@ -939,6 +826,9 @@ export default function App() {
                   src={NTUH_LOGO}
                   alt="台大醫院"
                   className="max-h-full max-w-full object-contain"
+                  onError={(e) => {
+                    e.currentTarget.style.display = 'none';
+                  }}
                 />
               </div>
             </div>
@@ -956,7 +846,7 @@ export default function App() {
 
             <div className="space-y-3">
               <div className="flex items-center gap-2 text-sm text-slate-700">
-                <Type className="w-4 h-4 text-slate-400" />
+                <Type className="h-4 w-4 text-slate-400" />
                 <span>字體大小</span>
               </div>
               <div className="grid grid-cols-4 gap-2">
@@ -978,7 +868,7 @@ export default function App() {
 
             <div className="space-y-3">
               <div className="flex items-center gap-2 text-sm text-slate-700">
-                <CalendarDays className="w-4 h-4 text-slate-400" />
+                <CalendarDays className="h-4 w-4 text-slate-400" />
                 <span>年度篩選</span>
               </div>
               <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 xl:grid-cols-2">
@@ -990,7 +880,7 @@ export default function App() {
                       className={`rounded-xl border px-3 py-2 text-sm transition-all ${
                         effectiveYears.includes(year)
                           ? 'border-blue-200 bg-blue-50 text-blue-700 shadow-sm'
-                          : 'border-slate-200 bg-white text-slate-500 hover:bg-slate-50 hover:border-slate-300'
+                          : 'border-slate-200 bg-white text-slate-500 hover:border-slate-300 hover:bg-slate-50'
                       }`}
                     >
                       {year}
@@ -1004,7 +894,7 @@ export default function App() {
 
             <div className="space-y-4 border-t border-slate-100 pt-4">
               <div className="flex items-center gap-2 text-sm text-slate-700">
-                <ListFilter className="w-4 h-4 text-slate-400" />
+                <ListFilter className="h-4 w-4 text-slate-400" />
                 <span>快速跳轉指標</span>
               </div>
 
@@ -1029,35 +919,6 @@ export default function App() {
                     </optgroup>
                   ))}
                 </select>
-                <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-3 text-slate-400">
-                  <svg className="h-4 w-4 fill-current" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20">
-                    <path d="M9.293 12.95l.707.707L15.657 8l-1.414-1.414L10 10.828 5.757 6.586 4.343 8z" />
-                  </svg>
-                </div>
-              </div>
-
-              <div className="space-y-3">
-                <div className="text-sm text-slate-700">年度可用指標分類</div>
-                {availableIndicatorGroups.length > 0 ? (
-                  availableIndicatorGroups.map((group) => (
-                    <div key={group.category} className="rounded-2xl border border-slate-200 bg-slate-50 p-3">
-                      <div className="mb-2 text-sm text-slate-700">{group.category}</div>
-                      <div className="flex flex-wrap gap-2">
-                        {group.indicators.map((indicator) => (
-                          <button
-                            key={indicator}
-                            onClick={() => handleIndicatorJump(indicator)}
-                            className="rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs text-slate-600 transition-colors hover:border-blue-300 hover:bg-blue-50 hover:text-blue-700"
-                          >
-                            {indicator}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                  ))
-                ) : (
-                  <div className="text-sm text-slate-400">目前篩選條件下無可用指標</div>
-                )}
               </div>
             </div>
           </div>
@@ -1087,7 +948,7 @@ export default function App() {
                       : 'text-slate-500 hover:bg-slate-200/50 hover:text-slate-700'
                   }`}
                 >
-                  <LayoutDashboard className="w-4 h-4" />
+                  <LayoutDashboard className="h-4 w-4" />
                   總覽視圖
                 </button>
                 <button
@@ -1099,7 +960,7 @@ export default function App() {
                       : 'text-slate-500 hover:bg-slate-200/50 hover:text-slate-700 disabled:cursor-not-allowed disabled:opacity-50'
                   }`}
                 >
-                  <TrendingUp className="w-4 h-4" />
+                  <TrendingUp className="h-4 w-4" />
                   分析視圖
                 </button>
               </div>
@@ -1110,8 +971,6 @@ export default function App() {
             {currentView === 'overview' && (
               <div className="mx-auto max-w-7xl space-y-8">
                 <div className="relative overflow-hidden rounded-[2rem] bg-gradient-to-br from-blue-600 to-indigo-700 p-6 text-white shadow-xl sm:p-8">
-                  <div className="absolute right-0 top-0 -mr-16 -mt-16 h-64 w-64 rounded-full bg-white opacity-10 blur-3xl"></div>
-
                   <div className="relative z-10 flex flex-col gap-6 lg:flex-row lg:items-center lg:justify-between">
                     <div className="max-w-xl">
                       <h2 className="mb-2 text-lg text-blue-100">所選年度整體達標率</h2>
@@ -1130,7 +989,7 @@ export default function App() {
                           }`}
                         >
                           <span className="inline-flex items-center gap-2">
-                            <Gauge className="w-4 h-4" />
+                            <Gauge className="h-4 w-4" />
                             儀表盤
                           </span>
                         </button>
@@ -1143,7 +1002,7 @@ export default function App() {
                           }`}
                         >
                           <span className="inline-flex items-center gap-2">
-                            <Activity className="w-4 h-4" />
+                            <Activity className="h-4 w-4" />
                             速度表 / 儀表圖
                           </span>
                         </button>
@@ -1163,7 +1022,7 @@ export default function App() {
                 {groupedOverviewData.map((group) => (
                   <div key={group.category}>
                     <h3 className="mb-4 flex items-center gap-2 text-lg text-slate-800">
-                      <FileText className="w-5 h-5 text-slate-400" />
+                      <FileText className="h-5 w-5 text-slate-400" />
                       {group.category}
                     </h3>
 
@@ -1195,26 +1054,33 @@ export default function App() {
                               }`}
                             >
                               {item.isSuccess ? (
-                                <CheckCircle2 className="w-5 h-5" />
+                                <CheckCircle2 className="h-5 w-5" />
                               ) : item.value === null ? (
-                                <AlertCircle className="w-5 h-5" />
+                                <AlertCircle className="h-5 w-5" />
                               ) : (
-                                <XCircle className="w-5 h-5" />
+                                <XCircle className="h-5 w-5" />
                               )}
                             </div>
-                            <span className="rounded-md bg-slate-100 px-2 py-1 text-xs text-slate-400">
-                              {item.meta.type === 'avg' ? '平均' : '加總'}
-                            </span>
                           </div>
 
                           <div className="mb-2 text-xs text-slate-400">
                             監測年度：{formatMonitoringYears(item.monitoringYears)}
                           </div>
 
-                          <div className="mb-2">
-                            <MiniGaugeChart
+                          <div className="mb-2 flex items-center gap-2">
+                            {item.meta.isNegative ? (
+                              <ArrowDownCircle className="h-4 w-4 text-rose-500" />
+                            ) : (
+                              <ArrowUpCircle className="h-4 w-4 text-emerald-500" />
+                            )}
+                            <span className={`text-xs ${item.meta.isNegative ? 'text-rose-600' : 'text-emerald-600'}`}>
+                              {item.meta.isNegative ? '負向指標（越低越好）' : '正向指標（越高越好）'}
+                            </span>
+                          </div>
+
+                          <div className="mb-3 rounded-2xl bg-slate-50 py-2">
+                            <SegmentedMiniGaugeChart
                               progress={item.gaugeProgress}
-                              isSuccess={!!item.isSuccess}
                               hasData={item.value !== null}
                             />
                           </div>
@@ -1223,33 +1089,32 @@ export default function App() {
                             {item.name}
                           </h4>
 
-                          <div className="mt-auto">
-                            <div className="mb-1 flex items-end gap-1">
-                              {item.value !== null ? (
-                                <>
-                                  <span
-                                    className={`text-2xl ${
-                                      item.isSuccess ? 'text-slate-800' : 'text-rose-600'
-                                    }`}
-                                  >
-                                    {item.meta.type === 'avg' || item.meta.unit === '%'
-                                      ? Number(item.value).toFixed(1)
-                                      : item.value}
-                                  </span>
-                                  <span className="mb-0.5 text-sm text-slate-500">{item.meta.unit}</span>
-                                </>
-                              ) : (
-                                <span className="text-xl text-slate-400">無資料</span>
-                              )}
+                          <div className="mt-auto grid grid-cols-2 gap-3">
+                            <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+                              <div className="mb-1 text-xs text-slate-400">監測結果</div>
+                              <div className={`text-2xl ${item.isSuccess ? 'text-slate-800' : 'text-rose-600'}`}>
+                                {item.value !== null
+                                  ? item.meta.type === 'avg' || item.meta.unit === '%'
+                                    ? Number(item.value).toFixed(1)
+                                    : item.value
+                                  : '--'}
+                              </div>
+                              <div className="text-sm text-slate-500">{item.meta.unit}</div>
                             </div>
-                            <div className="text-xs text-slate-400">
-                              目標: {item.target} {item.meta.unit}
-                              {item.meta.isNegative ? '(↓)' : '(↑)'}
-                            </div>
-                          </div>
 
-                          <div className="absolute bottom-4 right-4 translate-x-2 opacity-0 transition-all group-hover:translate-x-0 group-hover:opacity-100">
-                            <ChevronRight className="w-5 h-5 text-blue-500" />
+                            <div className="rounded-xl border border-blue-200 bg-blue-50 p-3">
+                              <div className="mb-1 text-xs text-blue-500">目標值</div>
+                              <div className="text-2xl text-blue-700">
+                                {item.target !== null && item.target !== undefined
+                                  ? item.meta.type === 'avg' || item.meta.unit === '%'
+                                    ? Number(item.target).toFixed(1)
+                                    : item.target
+                                  : '--'}
+                              </div>
+                              <div className="text-sm text-blue-500">
+                                {item.meta.unit} {item.meta.isNegative ? '(↓)' : '(↑)'}
+                              </div>
+                            </div>
                           </div>
                         </div>
                       ))}
@@ -1268,7 +1133,7 @@ export default function App() {
                         onClick={() => setCurrentView('overview')}
                         className="rounded-lg p-1 text-slate-400 transition-colors hover:bg-slate-100"
                       >
-                        <ChevronRight className="w-5 h-5 rotate-180" />
+                        <ChevronRight className="h-5 w-5 rotate-180" />
                       </button>
                       <h2 className="text-xl text-slate-800">{selectedIndicator}</h2>
                     </div>
@@ -1294,12 +1159,9 @@ export default function App() {
                 <div className="rounded-[2rem] border border-slate-200 bg-white p-5 shadow-sm sm:p-6 md:p-8">
                   <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                     <h3 className="flex items-center gap-2 text-slate-700">
-                      <TrendingUp className="w-5 h-5 text-blue-500" />
+                      <TrendingUp className="h-5 w-5 text-blue-500" />
                       年度趨勢圖表
                     </h3>
-                    <div className="text-xs text-slate-400">
-                      目前依年度彙總顯示，不展開月份與季別
-                    </div>
                   </div>
 
                   <div className="w-full overflow-x-auto pb-2">
@@ -1307,10 +1169,7 @@ export default function App() {
                       {detailChartData.length > 0 ? (
                         <ResponsiveContainer width="100%" height="100%">
                           {selectedMeta.type === 'avg' ? (
-                            <LineChart
-                              data={detailChartData}
-                              margin={{ top: 24, right: 20, left: 0, bottom: 24 }}
-                            >
+                            <LineChart data={detailChartData} margin={{ top: 24, right: 20, left: 0, bottom: 24 }}>
                               <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
                               <XAxis
                                 dataKey="name"
@@ -1335,11 +1194,6 @@ export default function App() {
                                   boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)',
                                   fontWeight: 700,
                                 }}
-                                labelStyle={{
-                                  fontWeight: '700',
-                                  color: '#1e293b',
-                                  marginBottom: '8px',
-                                }}
                                 formatter={(value, name) => [
                                   formatDisplayValue(
                                     value,
@@ -1350,7 +1204,6 @@ export default function App() {
                                 ]}
                               />
                               <Legend iconType="circle" wrapperStyle={{ paddingTop: '12px', fontWeight: 700 }} />
-
                               <Line
                                 type="monotone"
                                 dataKey="target"
@@ -1359,7 +1212,6 @@ export default function App() {
                                 strokeWidth={2}
                                 strokeDasharray="6 6"
                                 dot={false}
-                                activeDot={false}
                               />
                               <Line
                                 type="monotone"
@@ -1368,7 +1220,6 @@ export default function App() {
                                 stroke="#2563eb"
                                 strokeWidth={3}
                                 dot={{ r: isMobile ? 3 : 4, strokeWidth: 2 }}
-                                activeDot={{ r: isMobile ? 5 : 6, strokeWidth: 0 }}
                               >
                                 <LabelList
                                   dataKey="value"
@@ -1387,10 +1238,7 @@ export default function App() {
                               </Line>
                             </LineChart>
                           ) : (
-                            <BarChart
-                              data={detailChartData}
-                              margin={{ top: 24, right: 20, left: 0, bottom: 24 }}
-                            >
+                            <BarChart data={detailChartData} margin={{ top: 24, right: 20, left: 0, bottom: 24 }}>
                               <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
                               <XAxis
                                 dataKey="name"
@@ -1415,7 +1263,6 @@ export default function App() {
                                   boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)',
                                   fontWeight: 700,
                                 }}
-                                cursor={{ fill: '#f1f5f9' }}
                                 formatter={(value, name, props) => {
                                   if (name === '監測結果') {
                                     return [formatDisplayValue(value, selectedMeta.unit, 'sum'), name];
@@ -1427,13 +1274,7 @@ export default function App() {
                                 }}
                               />
                               <Legend iconType="circle" wrapperStyle={{ paddingTop: '12px', fontWeight: 700 }} />
-
-                              <Bar
-                                dataKey="value"
-                                name="監測結果"
-                                radius={[4, 4, 0, 0]}
-                                maxBarSize={isMobile ? 32 : 52}
-                              >
+                              <Bar dataKey="value" name="監測結果" radius={[4, 4, 0, 0]} maxBarSize={isMobile ? 32 : 52}>
                                 <LabelList
                                   dataKey="value"
                                   position="top"
@@ -1469,7 +1310,7 @@ export default function App() {
 
                 <div className="flex items-start gap-4 rounded-[2rem] border border-blue-100 bg-blue-50 p-5 shadow-sm sm:p-6 md:p-8">
                   <div className="mt-1 shrink-0 rounded-xl bg-blue-100 p-3">
-                    <FileText className="w-6 h-6 text-blue-600" />
+                    <FileText className="h-6 w-6 text-blue-600" />
                   </div>
                   <div>
                     <h3 className="mb-2 text-lg text-blue-900">最新檢討與改善回饋</h3>
