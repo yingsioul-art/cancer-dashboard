@@ -20,12 +20,13 @@ import {
   XCircle,
   AlertCircle,
   CalendarDays,
-  Filter,
   ChevronRight,
   FileText,
   ListFilter,
   Loader2,
   Type,
+  Gauge,
+  Activity,
 } from 'lucide-react';
 
 // 請將圖片放在 public/ntuh-logo.png
@@ -34,15 +35,6 @@ const NTUH_LOGO = '/ntuh-logo.png';
 const API_URL =
   'https://script.google.com/macros/s/AKfycbzjJgyMDSWmNzzowWRuxY5O2OrIWnIRXkpc4gMTUPVjGN49_Fi_c4RxC5k8AbjkRSY/exec';
 
-const MONTHS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
-const QUARTERS = [
-  { name: 'Q1', label: '第1季', months: [1, 2, 3] },
-  { name: 'Q2', label: '第2季', months: [4, 5, 6] },
-  { name: 'Q3', label: '第3季', months: [7, 8, 9] },
-  { name: 'Q4', label: '第4季', months: [10, 11, 12] },
-];
-const ALL_QUARTER_NAMES = QUARTERS.map((q) => q.name);
-
 const FONT_SCALE_OPTIONS = [
   { key: 'sm', label: '小', value: 0.92 },
   { key: 'md', label: '中', value: 1 },
@@ -50,7 +42,6 @@ const FONT_SCALE_OPTIONS = [
   { key: 'xl', label: '特大', value: 1.24 },
 ];
 
-// 指標名稱別名統一
 const INDICATOR_ALIASES = {
   '護理師對PortA管路照護完成率': '護理師對Port-A管路照護完成率',
   '護理師對PortA管路照護認知率': '護理師對Port-A管路照護認知率',
@@ -59,7 +50,6 @@ const INDICATOR_ALIASES = {
   '針劑型化療藥品溢灑發生件數': '針劑型化療藥品溢灑件數',
 };
 
-// 指標屬性
 const DEFAULT_INDICATOR_META = {
   '護理師對Port-A管路照護完成率': { type: 'avg', isNegative: false, unit: '%' },
   '護理師對Port-A管路照護認知率': { type: 'avg', isNegative: false, unit: '%' },
@@ -103,7 +93,6 @@ const DEFAULT_INDICATOR_META = {
   '護理師對嗜中性白血球低下照護認知率': { type: 'avg', isNegative: false, unit: '%' },
 };
 
-// 分類
 const CATEGORY_DEFINITIONS = {
   'Port-A照護': [
     '護理師對Port-A管路照護完成率',
@@ -201,12 +190,6 @@ const checkIsSuccess = (value, target, isNegative) => {
   return isNegative ? value <= target : value >= target;
 };
 
-const buildDetailPointTarget = (record, meta, mode, activeMonthCount = 1) => {
-  if (meta.type === 'avg') return record.target;
-  if (mode === 'month') return +(record.target / 12).toFixed(2);
-  return +((record.target * activeMonthCount) / 12).toFixed(2);
-};
-
 const getDynamicYAxisDomain = (chartData, unit) => {
   const values = chartData
     .flatMap((item) => [item.value, item.target])
@@ -266,9 +249,9 @@ const getMonthlyFromRow = (row) => {
   return monthly;
 };
 
-const rowHasMonitoringResult = (row, months = MONTHS) => {
+const rowHasMonitoringResult = (row) => {
   if (!row || !Array.isArray(row.monthly)) return false;
-  return months.some((month) => isValidNumberValue(row.monthly[month - 1]));
+  return row.monthly.some((value) => isValidNumberValue(value));
 };
 
 const inferIndicatorMetaFromName = (indicatorName) => {
@@ -369,65 +352,170 @@ const loadJsonp = (url) =>
     document.body.appendChild(script);
   });
 
-const getQuarterByName = (quarterName) => QUARTERS.find((q) => q.name === quarterName);
-
-const getAllowedMonthsByQuarters = (selectedQuarters) => {
-  const monthSet = new Set();
-  selectedQuarters.forEach((quarterName) => {
-    const quarter = getQuarterByName(quarterName);
-    if (!quarter) return;
-    quarter.months.forEach((month) => monthSet.add(month));
-  });
-  return MONTHS.filter((month) => monthSet.has(month));
-};
-
-const formatQuarterSummary = (quarterNames) => {
-  if (!quarterNames.length || quarterNames.length === QUARTERS.length) return '全部季別';
-  return quarterNames.join('、');
-};
-
 const formatMonitoringYears = (years) => {
   if (!years || years.length === 0) return '無監測年度';
   return years.length === 1 ? `${years[0]}年度` : `${years.join('、')}年度`;
 };
 
-const CustomXAxisTick = ({ x, y, payload, isMobile }) => {
-  const raw = String(payload?.value ?? '');
-  let line1 = raw;
-  let line2 = '';
+function polarToCartesian(cx, cy, r, angle) {
+  const rad = ((angle - 90) * Math.PI) / 180.0;
+  return {
+    x: cx + r * Math.cos(rad),
+    y: cy + r * Math.sin(rad),
+  };
+}
 
-  if (raw.includes('/')) {
-    const [year, month] = raw.split('/');
-    line1 = year;
-    line2 = `${month}月`;
-  } else if (raw.includes(' ')) {
-    const [year, period] = raw.split(' ');
-    line1 = year;
-    line2 = period;
-  }
+function describeArc(cx, cy, r, startAngle, endAngle) {
+  const start = polarToCartesian(cx, cy, r, endAngle);
+  const end = polarToCartesian(cx, cy, r, startAngle);
+  const largeArcFlag = endAngle - startAngle <= 180 ? '0' : '1';
+  return `M ${start.x} ${start.y} A ${r} ${r} 0 ${largeArcFlag} 0 ${end.x} ${end.y}`;
+}
+
+function GaugeChart({ value }) {
+  const safeValue = Math.max(0, Math.min(100, value || 0));
+  const size = 260;
+  const cx = 130;
+  const cy = 130;
+  const r = 88;
+  const startAngle = 180;
+  const endAngle = 180 + (safeValue / 100) * 180;
 
   return (
-    <g transform={`translate(${x},${y})`}>
-      <text
-        x={0}
-        y={0}
-        textAnchor="middle"
-        fill="#64748b"
-        fontSize={isMobile ? 10 : 12}
-        fontWeight={700}
-      >
-        <tspan x="0" dy="0.2em">
-          {line1}
-        </tspan>
-        {line2 ? (
-          <tspan x="0" dy="1.35em">
-            {line2}
-          </tspan>
-        ) : null}
-      </text>
-    </g>
+    <div className="flex flex-col items-center justify-center">
+      <svg width={size} height={170} viewBox="0 0 260 170">
+        <path
+          d={describeArc(cx, cy, r, 180, 360)}
+          fill="none"
+          stroke="rgba(255,255,255,0.22)"
+          strokeWidth="20"
+          strokeLinecap="round"
+        />
+        <path
+          d={describeArc(cx, cy, r, startAngle, endAngle)}
+          fill="none"
+          stroke="white"
+          strokeWidth="20"
+          strokeLinecap="round"
+        />
+        <text
+          x="130"
+          y="112"
+          textAnchor="middle"
+          fill="white"
+          fontSize="36"
+          fontWeight="700"
+        >
+          {safeValue}%
+        </text>
+        <text
+          x="46"
+          y="150"
+          textAnchor="middle"
+          fill="rgba(255,255,255,0.85)"
+          fontSize="12"
+          fontWeight="700"
+        >
+          0
+        </text>
+        <text
+          x="214"
+          y="150"
+          textAnchor="middle"
+          fill="rgba(255,255,255,0.85)"
+          fontSize="12"
+          fontWeight="700"
+        >
+          100
+        </text>
+      </svg>
+    </div>
   );
-};
+}
+
+function SpeedometerChart({ value }) {
+  const safeValue = Math.max(0, Math.min(100, value || 0));
+  const angle = -90 + (safeValue / 100) * 180;
+  const pointer = polarToCartesian(130, 130, 72, angle + 90);
+
+  return (
+    <div className="flex flex-col items-center justify-center">
+      <svg width="260" height="170" viewBox="0 0 260 170">
+        <path
+          d={describeArc(130, 130, 88, 180, 240)}
+          fill="none"
+          stroke="#f59e0b"
+          strokeWidth="20"
+          strokeLinecap="round"
+        />
+        <path
+          d={describeArc(130, 130, 88, 240, 300)}
+          fill="none"
+          stroke="#22c55e"
+          strokeWidth="20"
+          strokeLinecap="round"
+        />
+        <path
+          d={describeArc(130, 130, 88, 300, 360)}
+          fill="none"
+          stroke="#3b82f6"
+          strokeWidth="20"
+          strokeLinecap="round"
+        />
+        <line
+          x1="130"
+          y1="130"
+          x2={pointer.x}
+          y2={pointer.y}
+          stroke="white"
+          strokeWidth="5"
+          strokeLinecap="round"
+        />
+        <circle cx="130" cy="130" r="8" fill="white" />
+        <text
+          x="130"
+          y="112"
+          textAnchor="middle"
+          fill="white"
+          fontSize="34"
+          fontWeight="700"
+        >
+          {safeValue}%
+        </text>
+        <text
+          x="46"
+          y="150"
+          textAnchor="middle"
+          fill="rgba(255,255,255,0.85)"
+          fontSize="12"
+          fontWeight="700"
+        >
+          0
+        </text>
+        <text
+          x="130"
+          y="20"
+          textAnchor="middle"
+          fill="rgba(255,255,255,0.85)"
+          fontSize="12"
+          fontWeight="700"
+        >
+          50
+        </text>
+        <text
+          x="214"
+          y="150"
+          textAnchor="middle"
+          fill="rgba(255,255,255,0.85)"
+          fontSize="12"
+          fontWeight="700"
+        >
+          100
+        </text>
+      </svg>
+    </div>
+  );
+}
 
 export default function App() {
   const [indicatorMeta, setIndicatorMeta] = useState(DEFAULT_INDICATOR_META);
@@ -438,13 +526,10 @@ export default function App() {
   const [apiMessage, setApiMessage] = useState('正在載入線上資料...');
 
   const [selectedYears, setSelectedYears] = useState([]);
-  const [selectedQuarters, setSelectedQuarters] = useState(ALL_QUARTER_NAMES);
-  const [selectedMonths, setSelectedMonths] = useState(MONTHS);
-
   const [currentView, setCurrentView] = useState('overview');
   const [selectedIndicator, setSelectedIndicator] = useState(null);
-  const [timeDimension, setTimeDimension] = useState('month');
   const [fontScaleKey, setFontScaleKey] = useState('md');
+  const [gaugeMode, setGaugeMode] = useState('gauge');
 
   const [viewportWidth, setViewportWidth] = useState(
     typeof window !== 'undefined' ? window.innerWidth : 1440
@@ -528,33 +613,17 @@ export default function App() {
     });
   }, [availableYearsList]);
 
-  useEffect(() => {
-    const allowedMonths = getAllowedMonthsByQuarters(selectedQuarters);
-    setSelectedMonths((prev) => {
-      const filtered = prev.filter((month) => allowedMonths.includes(month));
-      return filtered.length > 0 ? filtered : allowedMonths;
-    });
-  }, [selectedQuarters]);
-
   const effectiveYears = selectedYears.length ? selectedYears : availableYearsList;
 
-  const effectiveMonths = useMemo(() => {
-    const allowedMonths = getAllowedMonthsByQuarters(selectedQuarters);
-    const filtered = selectedMonths.filter((month) => allowedMonths.includes(month));
-    return filtered.length > 0 ? filtered : allowedMonths;
-  }, [selectedMonths, selectedQuarters]);
-
-  // 只顯示該年度＋該月份範圍內真的有監測結果的指標
   const availableIndicatorNames = useMemo(() => {
     const indicators = rawData
       .filter(
-        (row) =>
-          effectiveYears.includes(row.year) && rowHasMonitoringResult(row, effectiveMonths)
+        (row) => effectiveYears.includes(row.year) && rowHasMonitoringResult(row)
       )
       .map((row) => row.indicator);
 
     return sortByStroke([...new Set(indicators)]);
-  }, [rawData, effectiveYears, effectiveMonths]);
+  }, [rawData, effectiveYears]);
 
   useEffect(() => {
     if (!selectedIndicator) return;
@@ -606,7 +675,7 @@ export default function App() {
           (d) =>
             d.indicator === indicatorName &&
             effectiveYears.includes(d.year) &&
-            rowHasMonitoringResult(d, effectiveMonths)
+            rowHasMonitoringResult(d)
         )
         .sort((a, b) => Number(a.year) - Number(b.year));
 
@@ -614,8 +683,8 @@ export default function App() {
       let latestTarget = 0;
 
       indicatorRecords.forEach((record) => {
-        const valuesForSelectedMonths = effectiveMonths.map((m) => record.monthly[m - 1]);
-        allRelevantValues = [...allRelevantValues, ...valuesForSelectedMonths];
+        const yearlyValues = record.monthly.filter(isValidNumberValue);
+        allRelevantValues = [...allRelevantValues, ...yearlyValues];
         latestTarget = record.target;
       });
 
@@ -636,7 +705,7 @@ export default function App() {
         monitoringYears,
       };
     });
-  }, [rawData, indicatorMeta, availableIndicatorNames, effectiveYears, effectiveMonths]);
+  }, [rawData, indicatorMeta, availableIndicatorNames, effectiveYears]);
 
   const groupedOverviewData = useMemo(() => {
     return availableIndicatorGroups
@@ -660,63 +729,28 @@ export default function App() {
     if (!selectedIndicator || !rawData.length) return [];
 
     const meta = indicatorMeta[selectedIndicator] || inferIndicatorMetaFromName(selectedIndicator);
-    const records = rawData
-      .filter((d) => d.indicator === selectedIndicator && effectiveYears.includes(d.year))
-      .sort((a, b) => Number(a.year) - Number(b.year));
 
-    if (timeDimension === 'month') {
-      return records.flatMap((record) =>
-        effectiveMonths
-          .map((monthNum) => {
-            const value = record.monthly[monthNum - 1];
-            if (!isValidNumberValue(value)) return null;
-
-            const target = buildDetailPointTarget(record, meta, 'month', 1);
-            return {
-              name: `${record.year}/${String(monthNum).padStart(2, '0')}`,
-              year: record.year,
-              period: `${monthNum}月`,
-              value,
-              target,
-              isSuccess: checkIsSuccess(value, target, meta.isNegative),
-            };
-          })
-          .filter(Boolean)
-      );
-    }
-
-    return records.flatMap((record) =>
-      QUARTERS.map((quarter) => {
-        if (!selectedQuarters.includes(quarter.name)) return null;
-
-        const activeMonths = quarter.months.filter((m) => effectiveMonths.includes(m));
-        if (!activeMonths.length) return null;
-
-        const quarterValues = activeMonths.map((m) => record.monthly[m - 1]);
-        const value = calculateAggregate(quarterValues, meta.type);
+    return rawData
+      .filter(
+        (d) =>
+          d.indicator === selectedIndicator &&
+          effectiveYears.includes(d.year) &&
+          rowHasMonitoringResult(d)
+      )
+      .sort((a, b) => Number(a.year) - Number(b.year))
+      .map((record) => {
+        const value = calculateAggregate(record.monthly.filter(isValidNumberValue), meta.type);
         if (value === null) return null;
-
-        const target = buildDetailPointTarget(record, meta, 'quarter', activeMonths.length);
-
         return {
-          name: `${record.year} ${quarter.name}`,
+          name: `${record.year}年`,
           year: record.year,
-          period: quarter.name,
           value,
-          target,
-          isSuccess: checkIsSuccess(value, target, meta.isNegative),
+          target: record.target,
+          isSuccess: checkIsSuccess(value, record.target, meta.isNegative),
         };
-      }).filter(Boolean)
-    );
-  }, [
-    rawData,
-    indicatorMeta,
-    selectedIndicator,
-    effectiveYears,
-    effectiveMonths,
-    selectedQuarters,
-    timeDimension,
-  ]);
+      })
+      .filter(Boolean);
+  }, [rawData, indicatorMeta, selectedIndicator, effectiveYears]);
 
   const detailYAxisDomain = useMemo(() => {
     if (!selectedIndicator) return ['auto', 'auto'];
@@ -737,13 +771,13 @@ export default function App() {
   const isMobile = viewportWidth < 640;
   const isTablet = viewportWidth >= 640 && viewportWidth < 1024;
   const chartHeight = isMobile ? 340 : isTablet ? 400 : 480;
-  const xAxisHeight = isMobile ? 72 : 64;
+  const xAxisHeight = 48;
 
   const selectedMeta = selectedIndicator
     ? indicatorMeta[selectedIndicator] || inferIndicatorMetaFromName(selectedIndicator)
     : null;
 
-  const chartPointWidth = isMobile ? 90 : isTablet ? 82 : 72;
+  const chartPointWidth = isMobile ? 110 : isTablet ? 100 : 88;
   const chartMinWidth = Math.max(
     isMobile ? viewportWidth - 48 : 640,
     detailChartData.length * chartPointWidth
@@ -756,31 +790,6 @@ export default function App() {
         return prev.filter((y) => y !== year);
       }
       return [...prev, year].sort((a, b) => Number(a) - Number(b));
-    });
-  };
-
-  const toggleQuarter = (quarterName) => {
-    setSelectedQuarters((prev) => {
-      if (prev.includes(quarterName)) {
-        if (prev.length === 1) return prev;
-        return prev.filter((name) => name !== quarterName);
-      }
-      return [...prev, quarterName].sort(
-        (a, b) => ALL_QUARTER_NAMES.indexOf(a) - ALL_QUARTER_NAMES.indexOf(b)
-      );
-    });
-  };
-
-  const toggleMonth = (month) => {
-    const allowedMonths = getAllowedMonthsByQuarters(selectedQuarters);
-    if (!allowedMonths.includes(month)) return;
-
-    setSelectedMonths((prev) => {
-      if (prev.includes(month)) {
-        const next = prev.filter((m) => m !== month).sort((a, b) => a - b);
-        return next.length ? next : prev;
-      }
-      return [...prev, month].sort((a, b) => a - b);
     });
   };
 
@@ -907,61 +916,6 @@ export default function App() {
               </div>
             </div>
 
-            <div className="space-y-3">
-              <div className="flex items-center gap-2 text-sm text-slate-700">
-                <Filter className="w-4 h-4 text-slate-400" />
-                <span>季別篩選</span>
-              </div>
-              <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 xl:grid-cols-2">
-                {QUARTERS.map((quarter) => (
-                  <button
-                    key={quarter.name}
-                    onClick={() => toggleQuarter(quarter.name)}
-                    className={`rounded-xl border px-3 py-2 text-sm transition-all ${
-                      selectedQuarters.includes(quarter.name)
-                        ? 'border-indigo-200 bg-indigo-50 text-indigo-700 shadow-sm'
-                        : 'border-slate-200 bg-white text-slate-500 hover:bg-slate-50 hover:border-slate-300'
-                    }`}
-                  >
-                    {quarter.label}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            <div className="space-y-3">
-              <div className="flex items-center gap-2 text-sm text-slate-700">
-                <Filter className="w-4 h-4 text-slate-400" />
-                <span>月份詳細核取</span>
-              </div>
-              <div className="grid grid-cols-4 gap-2 sm:grid-cols-6 xl:grid-cols-4">
-                {MONTHS.map((month) => {
-                  const isAllowed = getAllowedMonthsByQuarters(selectedQuarters).includes(month);
-                  const isSelected = effectiveMonths.includes(month);
-
-                  return (
-                    <button
-                      key={month}
-                      onClick={() => toggleMonth(month)}
-                      disabled={!isAllowed}
-                      className={`rounded-lg border py-1.5 text-xs transition-all ${
-                        !isAllowed
-                          ? 'cursor-not-allowed border-slate-100 bg-slate-100 text-slate-300'
-                          : isSelected
-                          ? 'border-blue-600 bg-blue-600 text-white shadow-sm'
-                          : 'border-slate-200 bg-white text-slate-500 hover:bg-slate-50'
-                      }`}
-                    >
-                      {month}月
-                    </button>
-                  );
-                })}
-              </div>
-              <p className="text-xs text-slate-400">
-                月份會依已選季別自動限制，例如只選 Q1 時，僅能選 1–3 月。
-              </p>
-            </div>
-
             <div className="space-y-4 border-t border-slate-100 pt-4">
               <div className="flex items-center gap-2 text-sm text-slate-700">
                 <ListFilter className="w-4 h-4 text-slate-400" />
@@ -1031,9 +985,7 @@ export default function App() {
                   {currentView === 'overview' ? '總覽' : '單一指標'}
                 </h1>
                 <p className="mt-1 text-sm leading-relaxed text-slate-500">
-                  資料區間：{effectiveYears.length > 0 ? effectiveYears.join(', ') : '未選擇年份'} 年｜
-                  {formatQuarterSummary(selectedQuarters)}｜
-                  {effectiveMonths.length} 個月份
+                  資料年度：{effectiveYears.length > 0 ? effectiveYears.join('、') : '未選擇年份'}
                 </p>
               </div>
 
@@ -1071,20 +1023,54 @@ export default function App() {
           <div className="relative flex-1 overflow-auto p-4 sm:p-6 lg:p-8">
             {currentView === 'overview' && (
               <div className="mx-auto max-w-7xl space-y-8">
-                <div className="relative flex items-center justify-between overflow-hidden rounded-[2rem] bg-gradient-to-br from-blue-600 to-indigo-700 p-6 text-white shadow-xl sm:p-8">
+                <div className="relative overflow-hidden rounded-[2rem] bg-gradient-to-br from-blue-600 to-indigo-700 p-6 text-white shadow-xl sm:p-8">
                   <div className="absolute right-0 top-0 -mr-16 -mt-16 h-64 w-64 rounded-full bg-white opacity-10 blur-3xl"></div>
-                  <div className="relative z-10">
-                    <h2 className="mb-2 text-lg text-blue-100">所選期間整體達標率</h2>
-                    <div className="flex flex-wrap items-baseline gap-3">
-                      <span className="text-5xl tracking-tight sm:text-6xl">{overallSuccessRate}%</span>
-                      <span className="text-sm text-blue-200">
+
+                  <div className="relative z-10 flex flex-col gap-6 lg:flex-row lg:items-center lg:justify-between">
+                    <div className="max-w-xl">
+                      <h2 className="mb-2 text-lg text-blue-100">所選年度整體達標率</h2>
+                      <div className="mb-4 text-sm text-blue-200">
                         ({overviewData.filter((d) => d.isSuccess).length} /{' '}
                         {overviewData.filter((d) => d.value !== null).length} 達標指標)
-                      </span>
+                      </div>
+
+                      <div className="flex flex-wrap gap-2">
+                        <button
+                          onClick={() => setGaugeMode('gauge')}
+                          className={`rounded-xl px-4 py-2 text-sm transition-all ${
+                            gaugeMode === 'gauge'
+                              ? 'bg-white text-blue-700 shadow-sm'
+                              : 'bg-white/15 text-white hover:bg-white/20'
+                          }`}
+                        >
+                          <span className="inline-flex items-center gap-2">
+                            <Gauge className="w-4 h-4" />
+                            儀表盤
+                          </span>
+                        </button>
+                        <button
+                          onClick={() => setGaugeMode('speedometer')}
+                          className={`rounded-xl px-4 py-2 text-sm transition-all ${
+                            gaugeMode === 'speedometer'
+                              ? 'bg-white text-blue-700 shadow-sm'
+                              : 'bg-white/15 text-white hover:bg-white/20'
+                          }`}
+                        >
+                          <span className="inline-flex items-center gap-2">
+                            <Activity className="w-4 h-4" />
+                            速度表 / 儀表圖
+                          </span>
+                        </button>
+                      </div>
                     </div>
-                  </div>
-                  <div className="relative z-10 hidden h-24 w-24 items-center justify-center rounded-full bg-white/20 backdrop-blur-sm md:flex">
-                    <FileText className="w-12 h-12 text-white" />
+
+                    <div className="flex justify-center">
+                      {gaugeMode === 'gauge' ? (
+                        <GaugeChart value={overallSuccessRate} />
+                      ) : (
+                        <SpeedometerChart value={overallSuccessRate} />
+                      )}
+                    </div>
                   </div>
                 </div>
 
@@ -1194,7 +1180,7 @@ export default function App() {
                     </div>
                     <div className="flex flex-wrap items-center gap-3 pl-9 text-sm text-slate-500">
                       <span className="rounded-md border border-slate-200 bg-slate-100 px-2.5 py-1">
-                        運算: {selectedMeta.type === 'avg' ? '平均值' : '加總值'}
+                        運算: {selectedMeta.type === 'avg' ? '年度平均值' : '年度加總值'}
                       </span>
                       <span className="flex items-center gap-1 rounded-md border border-slate-200 bg-slate-100 px-2.5 py-1">
                         方向：
@@ -1209,39 +1195,16 @@ export default function App() {
                       </span>
                     </div>
                   </div>
-
-                  <div className="flex rounded-xl bg-slate-100 p-1 self-start lg:self-auto">
-                    <button
-                      onClick={() => setTimeDimension('month')}
-                      className={`rounded-lg px-4 py-2 text-sm transition-all ${
-                        timeDimension === 'month'
-                          ? 'bg-white text-blue-700 shadow-sm'
-                          : 'text-slate-500 hover:text-slate-700'
-                      }`}
-                    >
-                      依月份展開
-                    </button>
-                    <button
-                      onClick={() => setTimeDimension('quarter')}
-                      className={`rounded-lg px-4 py-2 text-sm transition-all ${
-                        timeDimension === 'quarter'
-                          ? 'bg-white text-blue-700 shadow-sm'
-                          : 'text-slate-500 hover:text-slate-700'
-                      }`}
-                    >
-                      依季度聚合
-                    </button>
-                  </div>
                 </div>
 
                 <div className="rounded-[2rem] border border-slate-200 bg-white p-5 shadow-sm sm:p-6 md:p-8">
                   <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                     <h3 className="flex items-center gap-2 text-slate-700">
                       <TrendingUp className="w-5 h-5 text-blue-500" />
-                      趨勢圖表
+                      年度趨勢圖表
                     </h3>
                     <div className="text-xs text-slate-400">
-                      手機可左右滑動圖表，查看完整 X 軸資料
+                      目前依年度彙總顯示，不展開月份與季別
                     </div>
                   </div>
 
@@ -1261,7 +1224,7 @@ export default function App() {
                                 tickLine={false}
                                 interval={0}
                                 height={xAxisHeight}
-                                tick={(props) => <CustomXAxisTick {...props} isMobile={isMobile} />}
+                                tick={{ fill: '#64748b', fontSize: isMobile ? 10 : 12, fontWeight: 700 }}
                               />
                               <YAxis
                                 axisLine={false}
@@ -1312,7 +1275,6 @@ export default function App() {
                                 strokeWidth={3}
                                 dot={{ r: isMobile ? 3 : 4, strokeWidth: 2 }}
                                 activeDot={{ r: isMobile ? 5 : 6, strokeWidth: 0 }}
-                                connectNulls
                               >
                                 <LabelList
                                   dataKey="value"
@@ -1342,7 +1304,7 @@ export default function App() {
                                 tickLine={false}
                                 interval={0}
                                 height={xAxisHeight}
-                                tick={(props) => <CustomXAxisTick {...props} isMobile={isMobile} />}
+                                tick={{ fill: '#64748b', fontSize: isMobile ? 10 : 12, fontWeight: 700 }}
                               />
                               <YAxis
                                 axisLine={false}
