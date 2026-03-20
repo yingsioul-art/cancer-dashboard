@@ -517,6 +517,86 @@ function SpeedometerChart({ value }) {
   );
 }
 
+function MiniGaugeChart({ progress, isSuccess, hasData }) {
+  if (!hasData) {
+    return (
+      <div className="flex h-[120px] items-center justify-center text-sm text-slate-400">
+        無資料
+      </div>
+    );
+  }
+
+  const safeValue = Math.max(0, Math.min(100, progress || 0));
+  const cx = 90;
+  const cy = 90;
+  const r = 52;
+  const endAngle = 180 + (safeValue / 100) * 180;
+  const activeStroke = isSuccess ? '#10b981' : '#f43f5e';
+
+  return (
+    <div className="flex items-center justify-center">
+      <svg width="180" height="120" viewBox="0 0 180 120">
+        <path
+          d={describeArc(cx, cy, r, 180, 360)}
+          fill="none"
+          stroke="#e2e8f0"
+          strokeWidth="14"
+          strokeLinecap="round"
+        />
+        <path
+          d={describeArc(cx, cy, r, 180, endAngle)}
+          fill="none"
+          stroke={activeStroke}
+          strokeWidth="14"
+          strokeLinecap="round"
+        />
+        <text
+          x="90"
+          y="78"
+          textAnchor="middle"
+          fill={isSuccess ? '#047857' : '#be123c'}
+          fontSize="22"
+          fontWeight="700"
+        >
+          {safeValue}%
+        </text>
+        <text
+          x="42"
+          y="110"
+          textAnchor="middle"
+          fill="#94a3b8"
+          fontSize="10"
+          fontWeight="700"
+        >
+          0
+        </text>
+        <text
+          x="138"
+          y="110"
+          textAnchor="middle"
+          fill="#94a3b8"
+          fontSize="10"
+          fontWeight="700"
+        >
+          100
+        </text>
+      </svg>
+    </div>
+  );
+}
+
+const getIndicatorGaugeProgress = (value, target, isNegative) => {
+  if (!isValidNumberValue(value) || !isValidNumberValue(target) || target === 0) return null;
+
+  if (isNegative) {
+    const progress = (target / Math.max(value, 0.0001)) * 100;
+    return Math.max(0, Math.min(100, Math.round(progress)));
+  }
+
+  const progress = (value / target) * 100;
+  return Math.max(0, Math.min(100, Math.round(progress)));
+};
+
 export default function App() {
   const [indicatorMeta, setIndicatorMeta] = useState(DEFAULT_INDICATOR_META);
   const [rawData, setRawData] = useState([]);
@@ -694,6 +774,11 @@ export default function App() {
 
       const calculatedValue = calculateAggregate(allRelevantValues, meta.type);
       const isSuccess = checkIsSuccess(calculatedValue, latestTarget, meta.isNegative);
+      const gaugeProgress = getIndicatorGaugeProgress(
+        calculatedValue,
+        latestTarget,
+        meta.isNegative
+      );
 
       return {
         name: indicatorName,
@@ -703,6 +788,7 @@ export default function App() {
         isSuccess,
         category: INDICATOR_CATEGORY_MAP[indicatorName] || '其他未分類',
         monitoringYears,
+        gaugeProgress,
       };
     });
   }, [rawData, indicatorMeta, availableIndicatorNames, effectiveYears]);
@@ -1123,6 +1209,14 @@ export default function App() {
 
                           <div className="mb-2 text-xs text-slate-400">
                             監測年度：{formatMonitoringYears(item.monitoringYears)}
+                          </div>
+
+                          <div className="mb-2">
+                            <MiniGaugeChart
+                              progress={item.gaugeProgress}
+                              isSuccess={!!item.isSuccess}
+                              hasData={item.value !== null}
+                            />
                           </div>
 
                           <h4 className="mb-4 flex-1 text-sm leading-snug text-slate-700 transition-colors group-hover:text-blue-700">
