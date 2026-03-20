@@ -28,32 +28,103 @@ import {
   Loader2,
 } from 'lucide-react';
 
-// --- 指標屬性定義 ---
+// --- 指標屬性定義（依最新清單重建） ---
 const DEFAULT_INDICATOR_META = {
-  化學治療靜脈給藥過程完成率: { type: 'avg', isNegative: false, unit: '%' },
+  // Port-A照護
+  護理師對PortA管路照護完成率: { type: 'avg', isNegative: false, unit: '%' },
+  護理師對PortA管路照護認知率: { type: 'avg', isNegative: false, unit: '%' },
+
+  // 口腔粘膜炎照護
+  口腔黏膜炎病人自我照顧完成率: { type: 'avg', isNegative: false, unit: '%' },
+  口腔黏膜炎病人護理指導完成率: { type: 'avg', isNegative: false, unit: '%' },
+  化療病人口腔黏膜炎G2以上盛行率: { type: 'avg', isNegative: true, unit: '%' },
+  化療病人口腔黏膜炎G2以上發生率: { type: 'avg', isNegative: true, unit: '%' },
+  化療病人口腔黏膜炎盛行率: { type: 'avg', isNegative: true, unit: '%' },
+  化療病人口腔黏膜炎發生率: { type: 'avg', isNegative: true, unit: '%' },
+  癌症病人口腔黏膜炎G2以上盛行率: { type: 'avg', isNegative: true, unit: '%' },
+  癌症病人口腔黏膜炎盛行率: { type: 'avg', isNegative: true, unit: '%' },
+
+  // 化療外滲
   化療藥品外滲處理過程完成率: { type: 'avg', isNegative: false, unit: '%' },
   化療藥品外滲發生處理完成率: { type: 'avg', isNegative: false, unit: '%' },
   非起疱性化療藥品外滲發生件數: { type: 'sum', isNegative: true, unit: '件' },
   起疱性化療藥品外滲發生件數: { type: 'sum', isNegative: true, unit: '件' },
+
+  // 化療給藥安全
+  化學治療靜脈給藥過程完成率: { type: 'avg', isNegative: false, unit: '%' },
   針劑型化療給藥護理紀錄完整率: { type: 'avg', isNegative: false, unit: '%' },
   針劑型化療藥品給藥異常件數: { type: 'sum', isNegative: true, unit: '件' },
+  單位化療藥品儲存與環境維護完整率: { type: 'avg', isNegative: false, unit: '%' },
+  癌症治療副作用處置紀錄完整率: { type: 'avg', isNegative: false, unit: '%' },
   護理師處理化療給藥自我安全防護完整率: { type: 'avg', isNegative: false, unit: '%' },
+
+  // 化療溢灑
+  溢灑包內容物完整率: { type: 'avg', isNegative: false, unit: '%' },
+
+  // 心理照護
+  癌症病人情緒壓力主要問題評估完成率: { type: 'avg', isNegative: false, unit: '%' },
+
+  // 疼痛照護
+  中重度疼痛控制不良率_內科組: { type: 'avg', isNegative: true, unit: '%' },
+  中重度疼痛控制不良率_外科組: { type: 'avg', isNegative: true, unit: '%' },
+  中重度疼痛控制不良率_血液腫瘤組: { type: 'avg', isNegative: true, unit: '%' },
+  中重度疼痛控制不良率_兒科組: { type: 'avg', isNegative: true, unit: '%' },
+  中重度疼痛控制不良率_腫瘤專科組: { type: 'avg', isNegative: true, unit: '%' },
+  使用麻醉性止痛藥疼痛評估與紀錄完整率: { type: 'avg', isNegative: false, unit: '%' },
+
+  // 嗜中性白血球低下照護
+  嗜中性白血球低下照護完成率: { type: 'avg', isNegative: false, unit: '%' },
+  嗜中性白血球低下護理指導完成率: { type: 'avg', isNegative: false, unit: '%' },
+  護理師對嗜中性白血球低下照護完成率: { type: 'avg', isNegative: false, unit: '%' },
+  護理師對嗜中性白血球低下照護認知率: { type: 'avg', isNegative: false, unit: '%' },
 };
 
-// --- 指標分類主題（依指定順序）---
+// --- 指標分類主題（依你最新提供順序） ---
 const CATEGORY_DEFINITIONS = {
-  口腔粘膜炎: [],
-  疼痛: [],
-  嗜中性白血球低下: [],
+  'Port-A照護': [
+    '護理師對PortA管路照護完成率',
+    '護理師對PortA管路照護認知率',
+  ],
+  口腔粘膜炎照護: [
+    '口腔黏膜炎病人自我照顧完成率',
+    '口腔黏膜炎病人護理指導完成率',
+    '化療病人口腔黏膜炎G2以上盛行率',
+    '化療病人口腔黏膜炎G2以上發生率',
+    '化療病人口腔黏膜炎盛行率',
+    '化療病人口腔黏膜炎發生率',
+    '癌症病人口腔黏膜炎G2以上盛行率',
+    '癌症病人口腔黏膜炎盛行率',
+  ],
   化療外滲: [
     '化療藥品外滲處理過程完成率',
     '化療藥品外滲發生處理完成率',
     '非起疱性化療藥品外滲發生件數',
     '起疱性化療藥品外滲發生件數',
   ],
-  化療環境維護: ['護理師處理化療給藥自我安全防護完整率'],
-  治療副作用: ['針劑型化療藥品給藥異常件數'],
-  'Port-A照護': ['化學治療靜脈給藥過程完成率', '針劑型化療給藥護理紀錄完整率'],
+  化療給藥安全: [
+    '化學治療靜脈給藥過程完成率',
+    '針劑型化療給藥護理紀錄完整率',
+    '針劑型化療藥品給藥異常件數',
+    '單位化療藥品儲存與環境維護完整率',
+    '癌症治療副作用處置紀錄完整率',
+    '護理師處理化療給藥自我安全防護完整率',
+  ],
+  化療溢灑: ['溢灑包內容物完整率'],
+  心理照護: ['癌症病人情緒壓力主要問題評估完成率'],
+  疼痛照護: [
+    '中重度疼痛控制不良率_內科組',
+    '中重度疼痛控制不良率_外科組',
+    '中重度疼痛控制不良率_血液腫瘤組',
+    '中重度疼痛控制不良率_兒科組',
+    '中重度疼痛控制不良率_腫瘤專科組',
+    '使用麻醉性止痛藥疼痛評估與紀錄完整率',
+  ],
+  嗜中性白血球低下照護: [
+    '嗜中性白血球低下照護完成率',
+    '嗜中性白血球低下護理指導完成率',
+    '護理師對嗜中性白血球低下照護完成率',
+    '護理師對嗜中性白血球低下照護認知率',
+  ],
 };
 
 const INDICATOR_CATEGORY_MAP = Object.entries(CATEGORY_DEFINITIONS).reduce(
@@ -205,6 +276,33 @@ const normalizeRows = (payload) => {
     .filter((row) => row.year && row.indicator);
 };
 
+const inferIndicatorMetaFromName = (indicatorName) => {
+  const name = String(indicatorName || '');
+
+  if (name.includes('件數')) {
+    return { type: 'sum', isNegative: true, unit: '件' };
+  }
+
+  if (
+    name.includes('發生率') ||
+    name.includes('盛行率') ||
+    name.includes('控制不良率')
+  ) {
+    return { type: 'avg', isNegative: true, unit: '%' };
+  }
+
+  if (
+    name.includes('完成率') ||
+    name.includes('認知率') ||
+    name.includes('完整率') ||
+    name.includes('評估完成率')
+  ) {
+    return { type: 'avg', isNegative: false, unit: '%' };
+  }
+
+  return { type: 'avg', isNegative: false, unit: '%' };
+};
+
 const extractIndicatorMeta = (payload, rows) => {
   const apiMeta =
     payload?.indicatorMeta && typeof payload.indicatorMeta === 'object' ? payload.indicatorMeta : {};
@@ -212,7 +310,7 @@ const extractIndicatorMeta = (payload, rows) => {
 
   rows.forEach((row) => {
     if (!mergedMeta[row.indicator]) {
-      mergedMeta[row.indicator] = { type: 'avg', isNegative: false, unit: '%' };
+      mergedMeta[row.indicator] = inferIndicatorMetaFromName(row.indicator);
     }
   });
 
@@ -432,27 +530,40 @@ export default function App() {
 
   const availableIndicatorGroups = useMemo(() => {
     const grouped = {};
+    const uncategorized = [];
 
     availableIndicatorNames.forEach((indicator) => {
       const category = INDICATOR_CATEGORY_MAP[indicator];
-      if (!category) return;
+      if (!category) {
+        uncategorized.push(indicator);
+        return;
+      }
       if (!grouped[category]) grouped[category] = [];
       grouped[category].push(indicator);
     });
 
-    return Object.keys(CATEGORY_DEFINITIONS)
+    const orderedGroups = Object.keys(CATEGORY_DEFINITIONS)
       .map((category) => ({
         category,
         indicators: sortByStroke(grouped[category] || []),
       }))
       .filter((group) => group.indicators.length > 0);
+
+    if (uncategorized.length > 0) {
+      orderedGroups.push({
+        category: '其他未分類',
+        indicators: sortByStroke(uncategorized),
+      });
+    }
+
+    return orderedGroups;
   }, [availableIndicatorNames]);
 
   const overviewData = useMemo(() => {
     if (!rawData.length) return [];
 
     return availableIndicatorNames.map((indicatorName) => {
-      const meta = indicatorMeta[indicatorName] || { type: 'avg', isNegative: false, unit: '%' };
+      const meta = indicatorMeta[indicatorName] || inferIndicatorMetaFromName(indicatorName);
 
       const indicatorRecords = rawData
         .filter((d) => d.indicator === indicatorName && effectiveYears.includes(d.year))
@@ -476,7 +587,7 @@ export default function App() {
         value: calculatedValue,
         target: latestTarget,
         isSuccess,
-        category: INDICATOR_CATEGORY_MAP[indicatorName],
+        category: INDICATOR_CATEGORY_MAP[indicatorName] || '其他未分類',
       };
     });
   }, [rawData, indicatorMeta, availableIndicatorNames, effectiveYears, effectiveMonths]);
@@ -502,7 +613,7 @@ export default function App() {
   const detailChartData = useMemo(() => {
     if (!selectedIndicator || !rawData.length) return [];
 
-    const meta = indicatorMeta[selectedIndicator] || { type: 'avg', isNegative: false, unit: '%' };
+    const meta = indicatorMeta[selectedIndicator] || inferIndicatorMetaFromName(selectedIndicator);
     const records = rawData
       .filter((d) => d.indicator === selectedIndicator && effectiveYears.includes(d.year))
       .sort((a, b) => Number(a.year) - Number(b.year));
@@ -562,7 +673,8 @@ export default function App() {
 
   const detailYAxisDomain = useMemo(() => {
     if (!selectedIndicator) return ['auto', 'auto'];
-    return getDynamicYAxisDomain(detailChartData, indicatorMeta[selectedIndicator]?.unit);
+    const unit = (indicatorMeta[selectedIndicator] || inferIndicatorMetaFromName(selectedIndicator)).unit;
+    return getDynamicYAxisDomain(detailChartData, unit);
   }, [detailChartData, indicatorMeta, selectedIndicator]);
 
   const latestReview = useMemo(() => {
@@ -580,7 +692,7 @@ export default function App() {
   const xAxisHeight = isMobile ? 72 : 64;
 
   const selectedMeta = selectedIndicator
-    ? indicatorMeta[selectedIndicator] || { type: 'avg', isNegative: false, unit: '%' }
+    ? indicatorMeta[selectedIndicator] || inferIndicatorMetaFromName(selectedIndicator)
     : null;
 
   const chartPointWidth = isMobile ? 90 : isTablet ? 82 : 72;
@@ -606,8 +718,7 @@ export default function App() {
         return prev.filter((name) => name !== quarterName);
       }
       return [...prev, quarterName].sort(
-        (a, b) =>
-          ALL_QUARTER_NAMES.indexOf(a) - ALL_QUARTER_NAMES.indexOf(b)
+        (a, b) => ALL_QUARTER_NAMES.indexOf(a) - ALL_QUARTER_NAMES.indexOf(b)
       );
     });
   };
@@ -756,7 +867,7 @@ export default function App() {
                 })}
               </div>
               <p className="text-xs text-slate-400 leading-relaxed">
-                月份會依已選季別自動限制。例如只選 Q1，則僅能選 1–3 月。
+                月份會依已選季別自動限制，例如只選 Q1 時，僅能選 1–3 月。
               </p>
             </div>
 
@@ -1205,7 +1316,7 @@ export default function App() {
                   </div>
                 </div>
 
-                <div className="bg-blue-50 border border-blue-100 rounded-[2rem] p-5 sm:p-6 md:p-8 flex gap-4 items-start shadow-sm">
+                <div className="bg-blue-50 border border-blue-100 rounded-[2rem] p-5 sm:p-6 md:p-8 flex gap-4 items-start shadow-sm">  
                   <div className="bg-blue-100 p-3 rounded-xl shrink-0 mt-1">
                     <FileText className="w-6 h-6 text-blue-600" />
                   </div>
