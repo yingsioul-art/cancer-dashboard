@@ -1509,7 +1509,7 @@ export default function App() {
                           )}
                         </ResponsiveContainer>
                       ) : (
-                        <div className="flex h-full items-center justify-center text-slate-400">  
+                        <div className="flex h-full items-center justify-center text-slate-400">
                           沒有符合篩選條件的資料可供顯示
                         </div>
                       )}
