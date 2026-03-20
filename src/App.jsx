@@ -33,7 +33,6 @@ import {
   ArrowDownCircle,
 } from 'lucide-react';
 
-// 請將圖片放在 public/ntuh-logo.png
 const NTUH_LOGO = '/ntuh-logo.png';
 
 const API_URL =
@@ -45,6 +44,18 @@ const FONT_SCALE_OPTIONS = [
   { key: 'lg', label: '大', value: 1.12 },
   { key: 'xl', label: '特大', value: 1.24 },
 ];
+
+const QUARTER_OPTIONS = [
+  { key: 'Q1', label: '第1季', months: [1, 2, 3] },
+  { key: 'Q2', label: '第2季', months: [4, 5, 6] },
+  { key: 'Q3', label: '第3季', months: [7, 8, 9] },
+  { key: 'Q4', label: '第4季', months: [10, 11, 12] },
+];
+
+const MONTH_OPTIONS = Array.from({ length: 12 }, (_, index) => ({
+  value: index + 1,
+  label: `${index + 1}月`,
+}));
 
 const INDICATOR_ALIASES = {
   '護理師對PortA管路照護完成率': '護理師對Port-A管路照護完成率',
@@ -181,6 +192,37 @@ const parseMaybeNumber = (value) => {
   return Number.isNaN(num) ? null : num;
 };
 
+const getSelectedMonths = (selectedQuarter, selectedMonth) => {
+  if (selectedMonth) return [selectedMonth];
+  if (selectedQuarter) {
+    return QUARTER_OPTIONS.find((item) => item.key === selectedQuarter)?.months || [];
+  }
+  return Array.from({ length: 12 }, (_, index) => index + 1);
+};
+
+const getPeriodLabel = (selectedQuarter, selectedMonth) => {
+  if (selectedMonth) return `${selectedMonth}月同期比較`;
+  if (selectedQuarter) {
+    return `${QUARTER_OPTIONS.find((item) => item.key === selectedQuarter)?.label || selectedQuarter}同期比較`;
+  }
+  return '年度比較';
+};
+
+const getPeriodValueLabel = (selectedQuarter, selectedMonth) => {
+  if (selectedMonth) return `${selectedMonth}月監測結果`;
+  if (selectedQuarter) {
+    return `${QUARTER_OPTIONS.find((item) => item.key === selectedQuarter)?.label || selectedQuarter}監測結果`;
+  }
+  return '年度監測結果';
+};
+
+const getPeriodValues = (monthly, selectedMonths) => {
+  if (!Array.isArray(monthly)) return [];
+  return selectedMonths
+    .map((month) => monthly[month - 1])
+    .filter((value) => isValidNumberValue(value));
+};
+
 const formatDisplayValue = (value, unit, type) => {
   if (value === null || value === undefined) return '無資料';
   if (type === 'avg' || unit === '%') return `${Number(value).toFixed(1)}${unit}`;
@@ -259,9 +301,13 @@ const getMonthlyFromRow = (row) => {
   return monthly;
 };
 
-const rowHasMonitoringResult = (row) => {
+const rowHasMonitoringResult = (row, selectedMonths = null) => {
   if (!row || !Array.isArray(row.monthly)) return false;
-  return row.monthly.some((value) => isValidNumberValue(value));
+  const values =
+    Array.isArray(selectedMonths) && selectedMonths.length
+      ? selectedMonths.map((month) => row.monthly[month - 1])
+      : row.monthly;
+  return values.some((value) => isValidNumberValue(value));
 };
 
 const inferIndicatorMetaFromName = (indicatorName) => {
@@ -344,14 +390,11 @@ const parsePayloadText = (text) => {
   try {
     return JSON.parse(trimmed);
   } catch {
-    // 不是 JSON，就繼續試 JSONP
+    // continue
   }
 
   const match = trimmed.match(/^[^(]+\(([\s\S]*)\)\s*;?\s*$/);
-  if (match?.[1]) {
-    return JSON.parse(match[1]);
-  }
-
+  if (match?.[1]) return JSON.parse(match[1]);
   throw new Error('API 回傳格式不是 JSON / JSONP');
 };
 
@@ -378,7 +421,6 @@ const loadJsonp = (url) =>
 
     script.src = `${url}${url.includes('?') ? '&' : '?'}callback=${callbackName}`;
     script.async = true;
-
     script.onerror = () => {
       cleanup();
       reject(new Error('JSONP 載入失敗'));
@@ -527,6 +569,8 @@ export default function App() {
   const [apiMessage, setApiMessage] = useState('正在載入線上資料...');
 
   const [selectedYears, setSelectedYears] = useState([]);
+  const [selectedQuarter, setSelectedQuarter] = useState(null);
+  const [selectedMonth, setSelectedMonth] = useState(null);
   const [currentView, setCurrentView] = useState('overview');
   const [selectedIndicator, setSelectedIndicator] = useState(null);
   const [fontScaleKey, setFontScaleKey] = useState('md');
@@ -597,14 +641,28 @@ export default function App() {
   }, [availableYearsList]);
 
   const effectiveYears = selectedYears.length ? selectedYears : availableYearsList;
+  const selectedMonths = useMemo(
+    () => getSelectedMonths(selectedQuarter, selectedMonth),
+    [selectedQuarter, selectedMonth]
+  );
+  const periodLabel = useMemo(
+    () => getPeriodLabel(selectedQuarter, selectedMonth),
+    [selectedQuarter, selectedMonth]
+  );
+  const periodValueLabel = useMemo(
+    () => getPeriodValueLabel(selectedQuarter, selectedMonth),
+    [selectedQuarter, selectedMonth]
+  );
 
   const availableIndicatorNames = useMemo(() => {
     const indicators = rawData
-      .filter((row) => effectiveYears.includes(row.year) && rowHasMonitoringResult(row))
+      .filter(
+        (row) => effectiveYears.includes(row.year) && rowHasMonitoringResult(row, selectedMonths)
+      )
       .map((row) => row.indicator);
 
     return sortByStroke([...new Set(indicators)]);
-  }, [rawData, effectiveYears]);
+  }, [rawData, effectiveYears, selectedMonths]);
 
   useEffect(() => {
     if (!selectedIndicator) return;
@@ -656,7 +714,7 @@ export default function App() {
           (d) =>
             d.indicator === indicatorName &&
             effectiveYears.includes(d.year) &&
-            rowHasMonitoringResult(d)
+            rowHasMonitoringResult(d, selectedMonths)
         )
         .sort((a, b) => Number(a.year) - Number(b.year));
 
@@ -664,8 +722,8 @@ export default function App() {
       let latestTarget = 0;
 
       indicatorRecords.forEach((record) => {
-        const yearlyValues = record.monthly.filter(isValidNumberValue);
-        allRelevantValues = [...allRelevantValues, ...yearlyValues];
+        const periodValues = getPeriodValues(record.monthly, selectedMonths);
+        allRelevantValues = [...allRelevantValues, ...periodValues];
         latestTarget = record.target;
       });
 
@@ -688,7 +746,7 @@ export default function App() {
         gaugeProgress,
       };
     });
-  }, [rawData, indicatorMeta, availableIndicatorNames, effectiveYears]);
+  }, [rawData, indicatorMeta, availableIndicatorNames, effectiveYears, selectedMonths]);
 
   const groupedOverviewData = useMemo(() => {
     return availableIndicatorGroups
@@ -717,11 +775,11 @@ export default function App() {
         (d) =>
           d.indicator === selectedIndicator &&
           effectiveYears.includes(d.year) &&
-          rowHasMonitoringResult(d)
+          rowHasMonitoringResult(d, selectedMonths)
       )
       .sort((a, b) => Number(a.year) - Number(b.year))
       .map((record) => {
-        const value = calculateAggregate(record.monthly.filter(isValidNumberValue), meta.type);
+        const value = calculateAggregate(getPeriodValues(record.monthly, selectedMonths), meta.type);
         if (value === null) return null;
         return {
           name: `${record.year}年`,
@@ -732,7 +790,7 @@ export default function App() {
         };
       })
       .filter(Boolean);
-  }, [rawData, indicatorMeta, selectedIndicator, effectiveYears]);
+  }, [rawData, indicatorMeta, selectedIndicator, effectiveYears, selectedMonths]);
 
   const detailYAxisDomain = useMemo(() => {
     if (!selectedIndicator) return ['auto', 'auto'];
@@ -741,13 +799,21 @@ export default function App() {
     return getDynamicYAxisDomain(detailChartData, unit);
   }, [detailChartData, indicatorMeta, selectedIndicator]);
 
-  const latestReview = useMemo(() => {
-    if (!selectedIndicator || effectiveYears.length === 0 || !rawData.length) return '暫無檢討紀錄';
-    const sortedYears = [...effectiveYears].sort((a, b) => Number(b) - Number(a));
-    const record = rawData.find(
-      (d) => d.indicator === selectedIndicator && d.year === sortedYears[0]
-    );
-    return record && record.review ? `(${sortedYears[0]}年度) ${record.review}` : '暫無檢討紀錄';
+  const selectedIndicatorReviews = useMemo(() => {
+    if (!selectedIndicator || effectiveYears.length === 0 || !rawData.length) return [];
+
+    return [...effectiveYears]
+      .sort((a, b) => Number(a) - Number(b))
+      .map((year) => {
+        const record = rawData.find(
+          (d) => d.indicator === selectedIndicator && d.year === year
+        );
+        return {
+          year,
+          review: record?.review?.trim() || '本年度暫無 review 資料',
+          hasData: Boolean(record?.review?.trim()),
+        };
+      });
   }, [rawData, selectedIndicator, effectiveYears]);
 
   const isMobile = viewportWidth < 640;
@@ -773,6 +839,22 @@ export default function App() {
       }
       return [...prev, year].sort((a, b) => Number(a) - Number(b));
     });
+  };
+
+  const handleQuarterSelect = (quarterKey) => {
+    setSelectedQuarter((prev) => (prev === quarterKey ? null : quarterKey));
+    setSelectedMonth(null);
+  };
+
+  const handleMonthSelect = (month) => {
+    setSelectedMonth((prev) => (prev === month ? null : month));
+    setSelectedQuarter(null);
+  };
+
+  const cycleFontScale = () => {
+    const currentIndex = FONT_SCALE_OPTIONS.findIndex((item) => item.key === fontScaleKey);
+    const nextIndex = currentIndex === FONT_SCALE_OPTIONS.length - 1 ? 0 : currentIndex + 1;
+    setFontScaleKey(FONT_SCALE_OPTIONS[nextIndex].key);
   };
 
   const handleIndicatorJump = (indicatorName) => {
@@ -845,9 +927,21 @@ export default function App() {
             </div>
 
             <div className="space-y-3">
-              <div className="flex items-center gap-2 text-sm text-slate-700">
-                <Type className="h-4 w-4 text-slate-400" />
-                <span>字體大小</span>
+              <div className="flex items-center justify-between gap-3 text-sm text-slate-700">
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={cycleFontScale}
+                    className="rounded-lg p-1 text-slate-500 transition-colors hover:bg-slate-100 hover:text-blue-700"
+                    title="點一下切換字體大小"
+                  >
+                    <Type className="h-4 w-4" />
+                  </button>
+                  <span>字體大小</span>
+                </div>
+                <span className="rounded-lg bg-slate-100 px-2 py-1 text-xs text-slate-500">
+                  目前：{FONT_SCALE_OPTIONS.find((item) => item.key === fontScaleKey)?.label}
+                </span>
               </div>
               <div className="grid grid-cols-4 gap-2">
                 {FONT_SCALE_OPTIONS.map((option) => (
@@ -892,6 +986,60 @@ export default function App() {
               </div>
             </div>
 
+            <div className="space-y-3">
+              <div className="flex items-center gap-2 text-sm text-slate-700">
+                <CalendarDays className="h-4 w-4 text-slate-400" />
+                <span>季別同期比較</span>
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                {QUARTER_OPTIONS.map((option) => (
+                  <button
+                    key={option.key}
+                    onClick={() => handleQuarterSelect(option.key)}
+                    className={`rounded-xl border px-3 py-2 text-sm transition-all ${
+                      selectedQuarter === option.key
+                        ? 'border-indigo-200 bg-indigo-50 text-indigo-700 shadow-sm'
+                        : 'border-slate-200 bg-white text-slate-500 hover:bg-slate-50'
+                    }`}
+                  >
+                    {option.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="space-y-3">
+              <div className="flex items-center gap-2 text-sm text-slate-700">
+                <CalendarDays className="h-4 w-4 text-slate-400" />
+                <span>月份同期比較</span>
+              </div>
+              <div className="grid grid-cols-3 gap-2">
+                {MONTH_OPTIONS.map((option) => (
+                  <button
+                    key={option.value}
+                    onClick={() => handleMonthSelect(option.value)}
+                    className={`rounded-xl border px-3 py-2 text-sm transition-all ${
+                      selectedMonth === option.value
+                        ? 'border-emerald-200 bg-emerald-50 text-emerald-700 shadow-sm'
+                        : 'border-slate-200 bg-white text-slate-500 hover:bg-slate-50'
+                    }`}
+                  >
+                    {option.label}
+                  </button>
+                ))}
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setSelectedQuarter(null);
+                  setSelectedMonth(null);
+                }}
+                className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-600 transition-colors hover:bg-slate-100"
+              >
+                清除季別 / 月份，回到年度比較
+              </button>
+            </div>
+
             <div className="space-y-4 border-t border-slate-100 pt-4">
               <div className="flex items-center gap-2 text-sm text-slate-700">
                 <ListFilter className="h-4 w-4 text-slate-400" />
@@ -932,8 +1080,9 @@ export default function App() {
                   {currentView === 'overview' ? '總覽' : '單一指標'}
                 </h1>
                 <p className="mt-1 text-sm leading-relaxed text-slate-500">
-                  資料年度：{effectiveYears.length > 0 ? effectiveYears.join('、') : '未選擇年份'}
+                  比較年度：{effectiveYears.length > 0 ? effectiveYears.join('、') : '未選擇年份'}
                 </p>
+                <p className="mt-1 text-sm leading-relaxed text-slate-500">比較基準：{periodLabel}</p>
               </div>
 
               <div className="flex self-start rounded-xl border border-slate-200 bg-slate-100 p-1 shadow-inner lg:self-auto">
@@ -973,7 +1122,8 @@ export default function App() {
                 <div className="relative overflow-hidden rounded-[2rem] bg-gradient-to-br from-blue-600 to-indigo-700 p-6 text-white shadow-xl sm:p-8">
                   <div className="relative z-10 flex flex-col gap-6 lg:flex-row lg:items-center lg:justify-between">
                     <div className="max-w-xl">
-                      <h2 className="mb-2 text-lg text-blue-100">所選年度整體達標率</h2>
+                      <h2 className="mb-2 text-lg text-blue-100">所選條件整體達標率</h2>
+                      <div className="mb-2 text-sm text-blue-200">比較基準：{periodLabel}</div>
                       <div className="mb-4 text-sm text-blue-200">
                         ({overviewData.filter((d) => d.isSuccess).length} /{' '}
                         {overviewData.filter((d) => d.value !== null).length} 達標指標)
@@ -1063,9 +1213,10 @@ export default function App() {
                             </div>
                           </div>
 
-                          <div className="mb-2 text-xs text-slate-400">
+                          <div className="mb-1 text-xs text-slate-400">
                             監測年度：{formatMonitoringYears(item.monitoringYears)}
                           </div>
+                          <div className="mb-2 text-xs text-slate-400">比較區間：{periodLabel}</div>
 
                           <div className="mb-2 flex items-center gap-2">
                             {item.meta.isNegative ? (
@@ -1091,7 +1242,7 @@ export default function App() {
 
                           <div className="mt-auto grid grid-cols-2 gap-3">
                             <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
-                              <div className="mb-1 text-xs text-slate-400">監測結果</div>
+                              <div className="mb-1 text-xs text-slate-400">{periodValueLabel}</div>
                               <div className={`text-2xl ${item.isSuccess ? 'text-slate-800' : 'text-rose-600'}`}>
                                 {item.value !== null
                                   ? item.meta.type === 'avg' || item.meta.unit === '%'
@@ -1103,7 +1254,7 @@ export default function App() {
                             </div>
 
                             <div className="rounded-xl border border-blue-200 bg-blue-50 p-3">
-                              <div className="mb-1 text-xs text-blue-500">目標值</div>
+                              <div className="mb-1 text-xs text-blue-500">年度目標值</div>
                               <div className="text-2xl text-blue-700">
                                 {item.target !== null && item.target !== undefined
                                   ? item.meta.type === 'avg' || item.meta.unit === '%'
@@ -1139,7 +1290,10 @@ export default function App() {
                     </div>
                     <div className="flex flex-wrap items-center gap-3 pl-9 text-sm text-slate-500">
                       <span className="rounded-md border border-slate-200 bg-slate-100 px-2.5 py-1">
-                        運算: {selectedMeta.type === 'avg' ? '年度平均值' : '年度加總值'}
+                        運算: {selectedMeta.type === 'avg' ? '平均值' : '加總值'}
+                      </span>
+                      <span className="rounded-md border border-slate-200 bg-slate-100 px-2.5 py-1">
+                        比較基準：{periodLabel}
                       </span>
                       <span className="flex items-center gap-1 rounded-md border border-slate-200 bg-slate-100 px-2.5 py-1">
                         方向：
@@ -1162,6 +1316,9 @@ export default function App() {
                       <TrendingUp className="h-5 w-5 text-blue-500" />
                       年度趨勢圖表
                     </h3>
+                    <div className="rounded-xl bg-slate-100 px-3 py-2 text-sm text-slate-600">
+                      X 軸依年度比較，Y 值依 {periodLabel} 顯示
+                    </div>
                   </div>
 
                   <div className="w-full overflow-x-auto pb-2">
@@ -1198,7 +1355,7 @@ export default function App() {
                                   formatDisplayValue(
                                     value,
                                     selectedMeta.unit,
-                                    name === '目標值' ? 'avg' : selectedMeta.type
+                                    name === '年度目標值' ? 'avg' : selectedMeta.type
                                   ),
                                   name,
                                 ]}
@@ -1207,7 +1364,7 @@ export default function App() {
                               <Line
                                 type="monotone"
                                 dataKey="target"
-                                name="目標值"
+                                name="年度目標值"
                                 stroke="#94a3b8"
                                 strokeWidth={2}
                                 strokeDasharray="6 6"
@@ -1216,7 +1373,7 @@ export default function App() {
                               <Line
                                 type="monotone"
                                 dataKey="value"
-                                name="監測結果"
+                                name={periodValueLabel}
                                 stroke="#2563eb"
                                 strokeWidth={3}
                                 dot={{ r: isMobile ? 3 : 4, strokeWidth: 2 }}
@@ -1264,17 +1421,17 @@ export default function App() {
                                   fontWeight: 700,
                                 }}
                                 formatter={(value, name, props) => {
-                                  if (name === '監測結果') {
+                                  if (name === periodValueLabel) {
                                     return [formatDisplayValue(value, selectedMeta.unit, 'sum'), name];
                                   }
                                   return [
                                     formatDisplayValue(props?.payload?.target, selectedMeta.unit, 'sum'),
-                                    '目標值',
+                                    '年度目標值',
                                   ];
                                 }}
                               />
                               <Legend iconType="circle" wrapperStyle={{ paddingTop: '12px', fontWeight: 700 }} />
-                              <Bar dataKey="value" name="監測結果" radius={[4, 4, 0, 0]} maxBarSize={isMobile ? 32 : 52}>
+                              <Bar dataKey="value" name={periodValueLabel} radius={[4, 4, 0, 0]} maxBarSize={isMobile ? 32 : 52}>
                                 <LabelList
                                   dataKey="value"
                                   position="top"
@@ -1308,13 +1465,46 @@ export default function App() {
                   </div>
                 </div>
 
-                <div className="flex items-start gap-4 rounded-[2rem] border border-blue-100 bg-blue-50 p-5 shadow-sm sm:p-6 md:p-8">
-                  <div className="mt-1 shrink-0 rounded-xl bg-blue-100 p-3">
-                    <FileText className="h-6 w-6 text-blue-600" />
+                <div className="rounded-[2rem] border border-blue-100 bg-blue-50 p-5 shadow-sm sm:p-6 md:p-8">
+                  <div className="mb-4 flex items-center gap-3">
+                    <div className="shrink-0 rounded-xl bg-blue-100 p-3">
+                      <FileText className="h-6 w-6 text-blue-600" />
+                    </div>
+                    <div>
+                      <h3 className="text-lg text-blue-900">各年度 review 資料</h3>
+                      <p className="text-sm text-slate-600">
+                        目前會列出所選年度的 review，方便直接做年度間比較。
+                      </p>
+                    </div>
                   </div>
-                  <div>
-                    <h3 className="mb-2 text-lg text-blue-900">最新檢討與改善回饋</h3>
-                    <p className="whitespace-pre-wrap leading-relaxed text-slate-700">{latestReview}</p>
+
+                  <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+                    {selectedIndicatorReviews.length > 0 ? (
+                      selectedIndicatorReviews.map((item) => (
+                        <div
+                          key={item.year}
+                          className="rounded-2xl border border-white/80 bg-white/80 p-4 shadow-sm"
+                        >
+                          <div className="mb-2 flex items-center justify-between gap-3">
+                            <div className="text-base text-blue-900">{item.year} 年度</div>
+                            <span
+                              className={`rounded-full px-2.5 py-1 text-xs ${
+                                item.hasData
+                                  ? 'bg-emerald-100 text-emerald-700'
+                                  : 'bg-slate-100 text-slate-500'
+                              }`}
+                            >
+                              {item.hasData ? '有資料' : '無資料'}
+                            </span>
+                          </div>
+                          <p className="whitespace-pre-wrap leading-relaxed text-slate-700">
+                            {item.review}
+                          </p>
+                        </div>
+                      ))
+                    ) : (
+                      <div className="text-slate-500">暫無可顯示的 review 資料</div>
+                    )}
                   </div>
                 </div>
               </div>
